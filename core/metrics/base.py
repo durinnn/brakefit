@@ -16,7 +16,11 @@ class MetricResult:
     evidence 안의 숫자만 LLM 가드레일이 코칭 문구에 쓸 수 있다 (가드레일 화이트리스트).
     """
 
-    key: str              # "disposition_effect" | "averaging_down" | "chasing"
-    raw: float             # 원래 스케일의 값 (예: DE = PGR - PLR)
-    score_0_100: float      # 정규화 점수. 높을수록 편향이 강함
+    key: str  # "disposition_effect" | "averaging_down" | "chasing"
+    raw: float  # 원래 스케일의 값 (예: DE = PGR - PLR)
+    score_0_100: float  # 정규화 점수. 높을수록 편향이 강함
     evidence: list[dict] = field(default_factory=list)
+
+
+def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))

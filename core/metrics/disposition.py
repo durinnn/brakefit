@@ -23,11 +23,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.metrics.base import MetricResult
-
-
-def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
-    return max(low, min(high, value))
+from core.metrics.base import MetricResult, clamp
 
 
 def _latest_snapshot(timeline: pd.DataFrame, episode_ids: pd.Series) -> pd.DataFrame:
@@ -35,11 +31,7 @@ def _latest_snapshot(timeline: pd.DataFrame, episode_ids: pd.Series) -> pd.DataF
     open_rows = timeline[timeline["episode_id"].isin(episode_ids)]
     if open_rows.empty:
         return open_rows
-    return (
-        open_rows.sort_values("date")
-        .groupby("episode_id", as_index=False)
-        .tail(1)
-    )
+    return open_rows.sort_values("date").groupby("episode_id", as_index=False).tail(1)
 
 
 def compute(timeline: pd.DataFrame, trades: pd.DataFrame, episodes: pd.DataFrame) -> MetricResult:
@@ -54,8 +46,12 @@ def compute(timeline: pd.DataFrame, trades: pd.DataFrame, episodes: pd.DataFrame
     realized_losses = closed[closed["realized_pnl"] < 0]
 
     latest_open = _latest_snapshot(timeline, open_eps["episode_id"])
-    unrealized_gains = latest_open[latest_open["unrealized_pnl"] > 0] if not latest_open.empty else latest_open
-    unrealized_losses = latest_open[latest_open["unrealized_pnl"] < 0] if not latest_open.empty else latest_open
+    unrealized_gains = (
+        latest_open[latest_open["unrealized_pnl"] > 0] if not latest_open.empty else latest_open
+    )
+    unrealized_losses = (
+        latest_open[latest_open["unrealized_pnl"] < 0] if not latest_open.empty else latest_open
+    )
 
     pgr_denom = len(realized_gains) + len(unrealized_gains)
     plr_denom = len(realized_losses) + len(unrealized_losses)
@@ -63,22 +59,26 @@ def compute(timeline: pd.DataFrame, trades: pd.DataFrame, episodes: pd.DataFrame
     plr = len(realized_losses) / plr_denom if plr_denom else 0.0
 
     raw = pgr - plr
-    score = _clamp((raw + 1) / 2 * 100)
+    score = clamp((raw + 1) / 2 * 100)
 
     # evidence: 가장 빨리 판 이익 실현 건 + 가장 오래 버틴 손실(미실현 포함) 건을 근거로 제시
     evidence: list[dict] = []
     if not realized_gains.empty:
         fastest = realized_gains.nsmallest(1, "holding_days").iloc[0]
+        detail = f"{fastest['holding_days']}일 만에 매도, 실현손익 {fastest['realized_pnl']:,.0f}원"
         evidence.append(
             {
                 "trade_id": fastest["episode_id"],  # TODO: trades 에서 실제 trade_id 역추적
                 "date": str(fastest["opened_at"]),
                 "name": fastest["name"],
-                "detail": f"{fastest['holding_days']}일 만에 매도, 실현손익 {fastest['realized_pnl']:,.0f}원",
+                "detail": detail,
             }
         )
     longest_loss_pool = pd.concat(
-        [realized_losses, latest_open[latest_open["episode_id"].isin(unrealized_losses["episode_id"])]]
+        [
+            realized_losses,
+            latest_open[latest_open["episode_id"].isin(unrealized_losses["episode_id"])],
+        ]
         if not latest_open.empty
         else [realized_losses]
     )
@@ -87,9 +87,13 @@ def compute(timeline: pd.DataFrame, trades: pd.DataFrame, episodes: pd.DataFrame
         # episodes 쪽 행엔 unrealized_pnl 컬럼 자체가 없어 concat 후 NaN이 된다 →
         # NaN이면 아직 미청산이 아니라 "청산된 행"이라는 뜻이므로 realized_pnl로 폴백.
         pnl_value = (
-            longest["unrealized_pnl"] if pd.notna(longest.get("unrealized_pnl")) else longest["realized_pnl"]
+            longest["unrealized_pnl"]
+            if pd.notna(longest.get("unrealized_pnl"))
+            else longest["realized_pnl"]
         )
-        date_value = longest["opened_at"] if pd.notna(longest.get("opened_at")) else longest.get("date")
+        date_value = (
+            longest["opened_at"] if pd.notna(longest.get("opened_at")) else longest.get("date")
+        )
         evidence.append(
             {
                 "trade_id": longest["episode_id"],  # TODO: trades 에서 실제 trade_id 역추적
