@@ -1,0 +1,150 @@
+# 데이터 계약 (schema)
+
+> **상태: 초안 — A(리더) 확정 대기**
+> 소유: A · 초안 작성 2026-08-27 (파서 구현 중 필요해서 B 가 먼저 씀)
+> `architecture.md` 와 `sequences.md` 가 계속 이 문서를 참조하는데 실체가 없어서
+> 아무도 코딩을 시작할 수 없었다. 일단 구현 가능한 최소 형태로 박아둔다.
+> **A 는 §5 의 미결 사항 3개만 결정하면 된다.** 나머지는 이미 파서·테스트로 굳어 있다.
+
+이 문서에 적힌 것만 유효하다. 바꾸려면 **코드가 아니라 이 문서부터 PR.**
+
+---
+
+## 1. 표준 거래내역 (`trades`)
+
+파서의 출력이자 엔진의 입력. 증권사가 몇 곳이든 화면이 몇 개든 전부 이 표가 된다.
+엔진 이후는 원본 포맷을 전혀 모른다.
+
+코드: `core/schema.py` · `TRADE_COLUMNS`
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `trade_id` | str | 행 고유 ID. `{파일}:{시트}:{행}` |
+| `traded_at` | date | 체결일 |
+| `ticker` | str \| None | 종목코드 6자리. 화면에 없으면 None → `resolve_tickers()` |
+| `name` | str | 종목명 (원본 표기 그대로) |
+| `side` | `"BUY"` \| `"SELL"` | |
+| `quantity` | int | 체결수량, 항상 양수 |
+| `price` | float | 체결단가 |
+| `amount` | float | **정산금액.** 실제 현금 흐름 (거래금액 아님) |
+| `fee` | float \| None | 수수료 |
+| `tax` | float \| None | 제세금 합계 (거래세+농특세+소득세+지방소득세+양도세) |
+| `source` | str | 원본 파일명 |
+| `source_row` | int | 원본 행 번호 (역추적용) |
+| `note` | str | 원본 거래종류/매매구분 텍스트 (판정 근거) |
+
+### 1.1 ⚠ `fee` / `tax` 의 `None` 과 `0`
+
+| 값 | 의미 |
+|---|---|
+| `None` | **그 화면이 수수료를 안 알려준다.** → 실현손익이 gross |
+| `0` | 실제로 0원이었다 |
+
+`fillna(0)` 하지 말 것. 이 구분을 뭉개면 지표·백테스트 수치가 조용히 틀어진다.
+
+### 1.2 `amount` 는 정산금액이지 거래금액이 아니다
+
+```
+매수:  정산금액 = 거래금액 + 수수료
+매도:  정산금액 = 거래금액 − 수수료 − 제세금
+```
+
+`price × quantity`(거래금액)와 `amount`(정산금액)는 다르다.
+`schema.validate()` 가 0.5% 넘게 어긋나면 경고를 띄운다 — 정상 동작이다.
+
+---
+
+## 2. 포지션 타임라인 (`timeline`)
+
+엔진(A)의 출력. `(일자, 종목)` 단위.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `date` | date | 거래일 (영업일만) |
+| `ticker` | str | |
+| `name` | str | |
+| `quantity` | int | 그날 종가 기준 보유수량 |
+| `avg_cost` | float | 평단가 — **매입가중 이동평균, 매도 시 불변** |
+| `close` | float | 종가 (pykrx) |
+| `unrealized_pnl` | float | 평가손익 (원) = `(close − avg_cost) × quantity` |
+| `unrealized_pct` | float | 평가손익률 = `close / avg_cost − 1` |
+| `realized_pnl` | float | 그날 실현손익. 매도 없으면 0 |
+| `holding_days` | int | 현재 에피소드 진입일로부터 경과 영업일 |
+| `episode_id` | str | `{ticker}:{진입일}` |
+
+**규칙**
+
+- 보유수량 0 인 (일자, 종목)은 행을 만들지 않는다
+- 평단가에 **수수료·세금을 포함한다** (v1). §5.1 확정 대기
+- 거래정지·상장폐지로 종가가 없는 날은 **직전 종가를 캐리포워드**하고 경고를 남긴다
+
+---
+
+## 3. 포지션 에피소드 (`episodes`)
+
+진입(수량 0 → 양수)부터 청산(양수 → 0)까지가 한 에피소드.
+**전량 청산 후 재진입하면 새 에피소드**다.
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `episode_id` | str | `{ticker}:{진입일}` |
+| `ticker` / `name` | str | |
+| `opened_at` | date | 진입일 |
+| `closed_at` | date \| None | 청산일. 미청산이면 None |
+| `realized_pnl` | float | 에피소드 총 실현손익 |
+| `max_unrealized_loss` | float | 기간 중 최대 평가손실 (음수) |
+| `max_unrealized_loss_pct` | float | 위의 비율 |
+| `add_buy_count` | int | 진입 후 추가매수 횟수 |
+| `holding_days` | int | 보유 영업일수 |
+| `is_open` | bool | 미청산 여부 |
+
+---
+
+## 4. 지표 출력
+
+C 가 확립하고 B 가 ②③에서 복제하는 표준 형태.
+
+```python
+def compute(timeline, trades, episodes) -> MetricResult
+```
+
+```python
+@dataclass
+class MetricResult:
+    key: str              # "disposition_effect" | "averaging_down" | "chasing"
+    raw: float            # 원래 스케일의 값 (예: DE = PGR − PLR)
+    score_0_100: float    # 정규화 점수. 높을수록 편향이 강함
+    evidence: list[dict]  # 판정에 쓰인 거래 목록 — 워터폴·코칭 문구의 재료
+```
+
+`evidence[]` 의 각 항목은 최소한 `trade_id`, `date`, `name`, `detail`(사람이 읽는 한 줄)을 갖는다.
+**LLM 은 이 evidence 안의 숫자만 쓸 수 있다** (가드레일의 숫자 화이트리스트).
+
+---
+
+## 5. 미결 — A 가 결정할 것
+
+### 5.1 평단가에 수수료·세금을 포함하는가
+
+- v1 제안: **포함**. 사용자가 체감하는 손익과 일치한다
+- 리스크: 실 거래내역의 `fee`/`tax` 가 `None` 인 화면(0112 외)에서는 계산 불가
+- 결정하면 `core/engine` 과 `core/metrics` 양쪽에 영향
+
+### 5.2 `traded_at` 의 기준 — 체결일인가 결제일인가
+
+국내주식은 T+2 결제다. 0112 거래내역의 `거래일자`가 둘 중 무엇인지 실데이터로 확인 필요.
+평가손익 타임라인이 이틀씩 밀릴 수 있다.
+
+### 5.3 동일일 다중 체결 처리
+
+같은 날 같은 종목을 여러 번 사면 행이 여러 개다.
+- 안 1: 그대로 둔다 (추가매수 횟수가 부풀려짐)
+- 안 2: 같은 날 같은 방향은 하나로 합친다 (물타기 지표가 무뎌짐)
+
+---
+
+## 6. 변경 이력
+
+| 날짜 | 내용 |
+|---|---|
+| 2026-08-27 | 초안. B 가 파서 구현하면서 작성. §1 은 파서·테스트 30개로 이미 고정됨 |
