@@ -86,7 +86,9 @@ def _sell_probability(unrealized_pct: float, p: Persona) -> float:
     return base * math.exp(-(p.disposition_bias**2) * 3)
 
 
-def _add_buy_trigger(day_return: float, unrealized_pct: float, p: Persona) -> tuple[float, str] | None:
+def _add_buy_trigger(
+    day_return: float, unrealized_pct: float, p: Persona
+) -> tuple[float, str] | None:
     if day_return >= SURGE_THRESHOLD:
         # 급등일 자체가 드문 사건이라, 걸렸을 때 놓치지 않도록 확률을 세게 잡는다.
         return min(1.0, p.chasing_bias * 1.3), "chasing"

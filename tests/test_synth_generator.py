@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from datetime import date, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -121,10 +122,9 @@ def test_같은_종목의_episode끼리는_보유기간이_겹치지_않는다()
     price_index = {d: i for i, (d, _) in enumerate(universe["TEST"])}
 
     spans = sorted(
-        (price_index[ep.fills[0].traded_at], price_index[ep.fills[-1].traded_at])
-        for ep in episodes
+        (price_index[ep.fills[0].traded_at], price_index[ep.fills[-1].traded_at]) for ep in episodes
     )
-    for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
+    for (_s1, e1), (s2, _e2) in pairwise(spans):
         assert e1 < s2
 
 
@@ -159,7 +159,9 @@ def test_generate_trades는_스키마를_통과한다(small_universe):
 
 
 def test_페르소나가_다르면_출처_문자열도_다르다(small_universe):
-    df_disposition = generate_trades(replace(DISPOSITION_PRONE, n_episodes=2), tickers=small_universe)
+    df_disposition = generate_trades(
+        replace(DISPOSITION_PRONE, n_episodes=2), tickers=small_universe
+    )
     df_chasing = generate_trades(replace(CHASING_PRONE, n_episodes=2), tickers=small_universe)
 
     assert df_disposition["source"].iloc[0] == "synth:disposition_prone"

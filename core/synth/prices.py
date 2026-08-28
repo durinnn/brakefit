@@ -41,7 +41,9 @@ def get_daily_close(ticker: str, start: date, end: date) -> pd.Series:
 
     df = stock.get_market_ohlcv(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
     if df.empty:
-        raise ValueError(f"{ticker}: pykrx 에서 {start}~{end} 시세를 못 받아왔다 (상장폐지/코드오류?)")
+        raise ValueError(
+            f"{ticker}: pykrx 에서 {start}~{end} 시세를 못 받아왔다 (상장폐지/코드오류?)"
+        )
     fetched = df["종가"].rename(ticker)
     fetched.index = pd.to_datetime(fetched.index)
 
