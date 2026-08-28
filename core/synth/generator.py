@@ -118,16 +118,18 @@ class _Episode:
 
 
 def _simulate_episode(
-    ticker: str, prices: PricePath, entry_idx: int, limit_idx: int, p: Persona, rng: random.Random
-) -> tuple[_Episode, int]:
-    """entry_idx 에 진입해서 limit_idx 직전까지(또는 매도할 때까지) 시뮬레이션.
+    ticker: str, prices: PricePath, entry_idx: int, p: Persona, rng: random.Random
+) -> tuple[_Episode, int, bool]:
+    """entry_idx 에 진입해서 매도할 때까지(또는 시세 끝까지) 시뮬레이션.
 
-    limit_idx: 같은 종목의 다른(먼저 자리잡은) episode 가 시작되는 인덱스 — 그 너머로
-    넘어가면 두 episode 의 보유기간이 겹친다. 겹치면 engine 이 나중에 재구성할 실제
-    평단가가 이 시뮬레이션이 가정한 평단가와 달라져서, 애써 맞춰둔 편향 신호가
-    틀어진다(선택 순서가 시간순이 아니라 rng 순이라, "먼저 뽑힌" episode 가 나중
-    날짜에 자리잡을 수도 있어 진입 시점 겹침 체크만으로는 못 막는다).
-    (episode, 마지막으로 본 인덱스) 반환.
+    (episode, 마지막으로 본 인덱스, 청산 여부) 반환. 청산 안 됐으면 그 종목은 관찰기간
+    끝까지 계속 들고 있는 것 — docs/schema.md §3 의 episode 정의("청산 후 재진입하면
+    새 episode")상, 청산이 안 된 채로는 같은 종목에 새 episode 가 생길 수 없다. 그래서
+    끝까지 돌린다(중간에서 끊으면 그 뒤로 생기는 "새 episode" 가 사실은 이미 들고 있는
+    포지션 위에 얹히는 추가매수인데 별개 진입인 것처럼 취급돼서, engine 이 나중에
+    재구성할 평단가가 이 시뮬레이션이 가정한 것과 달라진다 — 실제 pykrx 데이터로
+    fixture 를 구워보고서야 드러난 버그. 처음엔 "다음 episode 시작 전 최소 여유일"만
+    두면 될 줄 알았는데, 그 여유일 안에 못 팔면 결국 같은 문제로 돌아갔다).
     """
     entry_date, entry_price = prices[entry_idx]
     quantity = max(1, round(p.budget / entry_price))
@@ -135,14 +137,13 @@ def _simulate_episode(
     ep = _Episode(ticker=ticker, fills=[_Fill(entry_date, "BUY", entry_price, quantity)])
     add_buys = 0
 
-    end_idx = min(len(prices), limit_idx)
-    for i in range(entry_idx + 1, end_idx):
+    for i in range(entry_idx + 1, len(prices)):
         d, close = prices[i]
         avg_cost = cost_basis / quantity
         unrealized_pct = close / avg_cost - 1
         if rng.random() < _sell_probability(unrealized_pct, p):
             ep.fills.append(_Fill(d, "SELL", close, quantity))
-            return ep, i
+            return ep, i, True
         if add_buys < p.max_add_buys:
             trig = _add_buy_trigger(_day_return(prices, i), unrealized_pct, p)
             if trig and rng.random() < trig[0]:
@@ -152,14 +153,24 @@ def _simulate_episode(
                 add_buys += 1
                 ep.fills.append(_Fill(d, "BUY", close, add_qty))
 
-    return ep, end_idx - 1  # 미청산 — 경계까지 SELL 없이 보유
+    return ep, len(prices) - 1, False  # 미청산 — 관찰기간 끝까지 보유
+
+
+#: 새 episode 를 시작하려면 시세 끝까지 최소 이만큼 거래일이 남아있어야 한다 — 순전히
+#: 품질 문제다(며칠 못 굴려보고 바로 미청산 처리되는 episode 가 너무 잦으면 신호가
+#: 희석된다). 겹침 방지는 frontier 설계 자체가 보장하므로 이 값은 작아도 안전하다.
+MIN_HOLDING_ROOM = 3
 
 
 def _run_persona(persona: Persona, universe: dict[str, PricePath]) -> list[_Episode]:
     rng = random.Random(persona.seed)
     tickers = list(universe.keys())
     episodes: list[_Episode] = []
-    occupied: dict[str, list[tuple[int, int]]] = {t: [] for t in tickers}
+    # ticker 별 "다음 episode 가 시작될 수 있는 가장 이른 인덱스" — 청산되면 그 다음
+    # 날로, 미청산이면 시세 끝(=그 종목은 이제 더 못 받음)으로 전진한다. 과거 빈 구간을
+    # 채워넣지 않는다 — 뒤에 이미 잡아둔 episode 와 겹칠 방법이 원천적으로 없어야
+    # (선택 순서가 시간순이 아니라 rng 순이라) 겹침을 사후에 못 걸러내는 일이 없다.
+    frontier: dict[str, int] = {t: 1 for t in tickers}
     attempts = 0
     max_attempts = persona.n_episodes * 50
 
@@ -167,18 +178,15 @@ def _run_persona(persona: Persona, universe: dict[str, PricePath]) -> list[_Epis
         attempts += 1
         ticker = rng.choice(tickers)
         prices = universe[ticker]
-        used = occupied[ticker]
-        # 마지막 10거래일은 진입 후보에서 제외 — 최소한의 보유 여지를 남긴다.
-        candidates = [
-            i for i in range(1, len(prices) - 10) if not any(s <= i <= e for s, e in used)
-        ]
-        if not candidates:
-            continue
+        start_from = frontier[ticker]
+        last_candidate = len(prices) - 1 - MIN_HOLDING_ROOM
+        if start_from > last_candidate:
+            continue  # 이 종목은 이번 페르소나 시뮬레이션에서 더 못 받는다
+        candidates = list(range(start_from, last_candidate + 1))
         weights = [_entry_weight(prices, i, persona) for i in candidates]
         entry_idx = rng.choices(candidates, weights=weights, k=1)[0]
-        limit_idx = min((s for s, _e in used if s > entry_idx), default=len(prices))
-        ep, last_idx = _simulate_episode(ticker, prices, entry_idx, limit_idx, persona, rng)
-        occupied[ticker].append((entry_idx, last_idx))
+        ep, last_idx, closed = _simulate_episode(ticker, prices, entry_idx, persona, rng)
+        frontier[ticker] = last_idx + 1 if closed else len(prices)
         episodes.append(ep)
 
     return episodes

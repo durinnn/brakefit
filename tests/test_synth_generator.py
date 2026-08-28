@@ -128,6 +128,37 @@ def test_같은_종목의_episode끼리는_보유기간이_겹치지_않는다()
         assert e1 < s2
 
 
+def test_한_종목에_많이_밀어넣어도_유령_보유가_안_남는다():
+    """실제 pykrx 데이터로 fixture 를 구워보고서야 드러난 회귀 버그.
+
+    간격 없이 다음 episode 바로 앞에 진입 후보가 잡히면, 그 episode 는 시뮬레이션할
+    기회(하루)도 없이 강제 미청산 처리됐다. 문제는 그 뒤로 같은 종목에 새로 잡히는
+    episode 들이 전부 이 "유령 보유" 위에 쌓여서, 실제로는 청산된 그 episode들의
+    매도가 전량이 아니라 유령 보유를 뺀 나머지만 판 것처럼 수량이 어긋났다 —
+    누적수량이 다시 0으로 돌아오지 않는 채로 계속 쌓였다.
+    MIN_HOLDING_ROOM 로 "다음 episode 시작 전 최소 N거래일" 을 강제해서 막았다.
+    """
+    universe = {"TEST": _fake_price_path(n=200, seed=11)}
+    persona = replace(RATIONAL_BASELINE, n_episodes=40, seed=5)  # 한 종목에 몰아서 밀도 스트레스
+
+    episodes = _run_persona(persona, universe)
+    all_fills = sorted((f.traded_at, f.side, f.quantity) for ep in episodes for f in ep.fills)
+
+    qty = 0
+    zero_crossings = 0  # 0 -> 양수로 넘어가는 "진짜 새 진입" 횟수
+    for _traded_at, side, quantity in all_fills:
+        was_zero = qty == 0
+        qty += quantity if side == "BUY" else -quantity
+        assert qty >= 0  # 안 가진 걸 팔 수는 없다
+        if was_zero and side == "BUY":
+            zero_crossings += 1
+
+    # episode 개수만큼 "누적수량 0에서 새로 시작" 하는 진입이 있어야 한다 — 두
+    # episode 가 하나의 미청산 포지션 위에 몰래 얹히면 이 값이 실제 episode 수보다
+    # 작아진다(유령 보유 버그의 직접적인 증상).
+    assert zero_crossings == len(episodes)
+
+
 # ── pandas 접합부 (get_daily_close 를 몽키패치해서 네트워크 없이 검증) ──────────
 
 
