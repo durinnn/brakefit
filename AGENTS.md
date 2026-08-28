@@ -73,10 +73,13 @@ python tools/inspect_export.py <파일> --redact       # 공유용 마스킹 사
 
 ## 하지 말 것 (이번 대회 한정)
 
-React / Next.js · Docker 최적화 · CI-CD · vectorbt·backtrader ·
+Docker 최적화 · CI-CD · vectorbt·backtrader ·
 GitHub Spec Kit 도입 · MCP 5개 이상 · ML 모델 학습
 
 이유는 `claude/toolchain-decisions.md` 참조. 시간이 남아도 되살리지 않는다.
+
+> React/Next.js 는 2026-08-28 부로 제외됨 — D 가 `lovulive` 브랜치에 프론트 스켈레톤을
+> 이미 Next.js 로 짜서 올렸다. `web/` 은 이 스택으로 확정.
 
 ## 현재 상태 (2026-08-27)
 
