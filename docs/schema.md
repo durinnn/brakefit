@@ -122,20 +122,42 @@ class MetricResult:
 
 ---
 
-## 5. 미결 — A 가 결정할 것
+## 5. 원시 시세 (B 제공)
 
-### 5.1 평단가에 수수료·세금을 포함하는가
+`core/engine` 이전에도 종목의 원시 일봉 종가가 필요한 곳이 있다 — 예: `core/metrics/chasing.py`
+가 신규 진입 매수의 추격 여부를 판정하려면 진입일 이전 종가가 있어야 하는데, `timeline`(§2)의
+`close` 는 **포지션을 들고 있는 동안만** 존재해서 신규 진입 시점엔 비교할 값이 없다
+(`core/metrics/chasing.py` 자체 TODO에 명시돼 있었음).
+
+```python
+from core.synth.prices import get_daily_close, as_pairs
+
+get_daily_close(ticker: str, start: date, end: date) -> pd.Series
+    # index=Timestamp(영업일만), name=ticker, 값=종가(원)
+as_pairs(series: pd.Series) -> list[tuple[date, float]]
+    # pandas 없이 쓰고 싶을 때
+```
+
+내부에서 pykrx 를 호출하고 `data/cache/prices/{ticker}.parquet` 에 캐싱한다(캐시는 커밋 대상 —
+`.gitignore` 참조, 데모 당일 KRX 장애 대비). `core/synth` 가 합성 거래 가격을 실제 시세에
+묶기 위해 먼저 만들었고, `core/metrics` 등 다른 모듈도 그대로 가져다 쓰면 된다.
+
+---
+
+## 6. 미결 — A 가 결정할 것
+
+### 6.1 평단가에 수수료·세금을 포함하는가
 
 - v1 제안: **포함**. 사용자가 체감하는 손익과 일치한다
 - 리스크: 실 거래내역의 `fee`/`tax` 가 `None` 인 화면(0112 외)에서는 계산 불가
 - 결정하면 `core/engine` 과 `core/metrics` 양쪽에 영향
 
-### 5.2 `traded_at` 의 기준 — 체결일인가 결제일인가
+### 6.2 `traded_at` 의 기준 — 체결일인가 결제일인가
 
 국내주식은 T+2 결제다. 0112 거래내역의 `거래일자`가 둘 중 무엇인지 실데이터로 확인 필요.
 평가손익 타임라인이 이틀씩 밀릴 수 있다.
 
-### 5.3 동일일 다중 체결 처리
+### 6.3 동일일 다중 체결 처리
 
 같은 날 같은 종목을 여러 번 사면 행이 여러 개다.
 - 안 1: 그대로 둔다 (추가매수 횟수가 부풀려짐)
@@ -143,8 +165,9 @@ class MetricResult:
 
 ---
 
-## 6. 변경 이력
+## 7. 변경 이력
 
 | 날짜 | 내용 |
 |---|---|
 | 2026-08-27 | 초안. B 가 파서 구현하면서 작성. §1 은 파서·테스트 30개로 이미 고정됨 |
+| 2026-08-28 | §5 원시 시세 인터페이스(`core/synth/prices.py`) 추가 — `core/metrics/chasing.py` 의 신규진입 판정 TODO 를 이게 푼다. `core/synth` 도 이걸로 합성 거래 가격을 실제 종가에 묶음 |

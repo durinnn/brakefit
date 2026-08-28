@@ -81,13 +81,15 @@ GitHub Spec Kit 도입 · MCP 5개 이상 · ML 모델 학습
 > React/Next.js 는 2026-08-28 부로 제외됨 — D 가 `lovulive` 브랜치에 프론트 스켈레톤을
 > 이미 Next.js 로 짜서 올렸다. `web/` 은 이 스택으로 확정.
 
-## 현재 상태 (2026-08-27)
+## 현재 상태 (2026-08-28)
 
 - ✅ `core/parser` — KB증권 화면 3종 매핑 완료, 테스트 30개
 - ✅ `tools/inspect_export.py` — 증권사 파일 구조 덤프
-- ⬜ `docs/schema.md` — **초안만 있음. A 의 확정 필요 (최대 병목)**
-- ⬜ `core/synth` — 합성 페르소나 생성기. 실 거래내역이 없어 이게 유일한 데이터 소스
-- ⬜ `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` · `web/`
+- ✅ `core/synth` — 합성 페르소나 5종(대조군 + 처분효과·물타기·추격매수 순수형 + 복합형).
+  Monte Carlo 로 편향 신호 검증 완료. `core/synth/prices.py` 가 pykrx 원시 시세 인터페이스도
+  겸함(§5, `core/metrics/chasing.py` 신규진입 TODO 해결)
+- ⬜ `docs/schema.md` — 원시 시세(§5) 는 확정. **§6 미결 3개는 여전히 A 의 확정 필요**
+- ⬜ `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` · `web/`(스켈레톤은 `lovulive` 브랜치에 있음)
 
 ⚠ **실 거래내역은 아직 0건이다.** 계좌는 개설했으나 국내주식 매매 이력이 없다.
 개발·데모는 `core/synth` 의 합성 페르소나로 간다. 파서는 실데이터가 오면 바로 붙도록 준비만 된 상태.
