@@ -20,6 +20,8 @@ uv run ruff format . && uv run ruff check --fix .   # 커밋 전 필수
 
 python tools/inspect_export.py <증권사파일>          # export 구조 확인
 python tools/inspect_export.py <파일> --redact       # 공유용 마스킹 사본
+
+python tools/generate_synth_fixtures.py              # fixtures/synth/*.csv 재생성 (실 거래내역 없을 때 이걸로 개발)
 ```
 
 ## 폴더 오너십 — 자기 폴더 밖은 PR 리뷰 필수
@@ -86,8 +88,14 @@ GitHub Spec Kit 도입 · MCP 5개 이상 · ML 모델 학습
 - ✅ `core/parser` — KB증권 화면 3종 매핑 완료, 테스트 30개
 - ✅ `tools/inspect_export.py` — 증권사 파일 구조 덤프
 - ✅ `core/synth` — 합성 페르소나 5종(대조군 + 처분효과·물타기·추격매수 순수형 + 복합형).
-  Monte Carlo 로 편향 신호 검증 완료. `core/synth/prices.py` 가 pykrx 원시 시세 인터페이스도
-  겸함(§5, `core/metrics/chasing.py` 신규진입 TODO 해결)
+  Monte Carlo + 실제 pykrx 데이터로 편향 신호 검증 완료(그 과정에서 episode 배치 버그
+  하나 발견·수정 — `git log` 참조). `core/synth/prices.py` 가 pykrx 원시 시세 인터페이스도
+  겸함(§5, `core/metrics/chasing.py` 신규진입 TODO 해결). `fixtures/synth/*.csv` 로
+  A/C/D 가 바로 쓸 수 있는 데모 데이터 공급 완료 — `tools/generate_synth_fixtures.py`
+  로 재생성 가능
+- ⚠ `pyproject.toml` 에 `setuptools<81` 추가함(사전 논의 없이 — pykrx 가 요구하는
+  `pkg_resources` 를 최신 setuptools 가 빼버려서 import 자체가 안 됐음, D-10 코드규칙
+  "새 라이브러리 전 물어보기" 예외적으로 건너뜀). `uv.lock` 도 커밋함
 - ⬜ `docs/schema.md` — 원시 시세(§5) 는 확정. **§6 미결 3개는 여전히 A 의 확정 필요**
 - ⬜ `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` · `web/`(스켈레톤은 `lovulive` 브랜치에 있음)
 
