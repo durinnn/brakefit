@@ -13,6 +13,10 @@ dependencies = [
     "pyarrow>=16.0",       # 일봉 parquet 캐시
     "pykrx>=1.0.45",       # KRX 일봉
     "anthropic>=0.34",     # LLM 가드레일 — 소형 고속 모델 호출
+    # pykrx 내부가 pkg_resources 를 쓰는데, (1) setuptools 는 더 이상 파이썬 표준 venv에
+    # 기본 포함이 아니고 (2) 최신 setuptools 는 pkg_resources 자체를 빼버렸다.
+    # 안 넣으면(또는 최신 버전이면) pykrx import 자체가 ModuleNotFoundError 로 죽는다.
+    "setuptools<81",
 ]
 
 [project.optional-dependencies]

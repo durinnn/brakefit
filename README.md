@@ -142,9 +142,10 @@ main 보호 + PR · 논쟁은 10분 토론 후 리더 결정
 |---|---|
 | `core/parser` | ✅ KB 화면 3종 매핑, 테스트 30개 |
 | `tools/inspect_export.py` | ✅ 증권사 파일 구조 덤프 + 개인정보 마스킹 |
-| `docs/schema.md` | ⬜ 초안. **A 확정 필요 — §5 미결 3개** (최대 병목) |
-| `core/synth` | ⬜ **다음 작업.** 이게 나와야 A·C·D가 각자 움직인다 |
-| `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` · `web/` | ⬜ |
+| `core/synth` | ✅ 합성 페르소나 5종 + pykrx 원시 시세 캐시(`prices.py`). Monte Carlo로 편향 신호 검증 |
+| `docs/schema.md` | 원시 시세 인터페이스(§5) 확정. **A 확정 필요 — §6 미결 3개** (최대 병목) |
+| `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` | ⬜ |
+| `web/` | 스켈레톤은 `lovulive` 브랜치 (Next.js) |
 
 ## 9. 관련 문서
 
