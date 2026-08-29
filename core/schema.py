@@ -20,19 +20,19 @@ Side = Literal["BUY", "SELL"]
 
 #: 표준 거래내역 컬럼 (순서 고정 — 하위 모듈이 위치로 참조해도 되게)
 TRADE_COLUMNS: list[str] = [
-    "trade_id",    # str   행 고유 ID. "{source}:{sheet}:{row}" 형태
-    "traded_at",   # date  체결일 (시각 정보가 있으면 traded_time 에 별도 보관)
-    "ticker",      # str   종목코드 6자리. 화면에 없으면 None → resolve_tickers() 로 채움
-    "name",        # str   종목명 (원본 표기 그대로)
-    "side",        # str   "BUY" | "SELL"
-    "quantity",    # int   체결수량 (항상 양수)
-    "price",       # float 체결단가
-    "amount",      # float 정산금액. 매수=출금액, 매도=입금액
-    "fee",         # float 수수료. 화면에 없으면 None (0 으로 채우지 말 것 — 아래 주의 참조)
-    "tax",         # float 제세금. 위와 동일
-    "source",      # str   어느 파일/화면에서 왔는지
+    "trade_id",  # str   행 고유 ID. "{source}:{sheet}:{row}" 형태
+    "traded_at",  # date  체결일 (시각 정보가 있으면 traded_time 에 별도 보관)
+    "ticker",  # str   종목코드 6자리. 화면에 없으면 None → resolve_tickers() 로 채움
+    "name",  # str   종목명 (원본 표기 그대로)
+    "side",  # str   "BUY" | "SELL"
+    "quantity",  # int   체결수량 (항상 양수)
+    "price",  # float 체결단가
+    "amount",  # float 정산금액. 매수=출금액, 매도=입금액
+    "fee",  # float 수수료. 화면에 없으면 None (0 으로 채우지 말 것 — 아래 주의 참조)
+    "tax",  # float 제세금. 위와 동일
+    "source",  # str   어느 파일/화면에서 왔는지
     "source_row",  # int   원본 행 번호 (역추적용)
-    "note",        # str   원본 '내용' 텍스트 등 판정 근거
+    "note",  # str   원본 '내용' 텍스트 등 판정 근거
 ]
 
 #: fee/tax 가 None 인 것과 0 인 것은 의미가 다르다.
@@ -41,6 +41,46 @@ TRADE_COLUMNS: list[str] = [
 #: 이 구분을 뭉개면 지표·백테스트 수치가 전부 흔들린다. docs/schema.md §수수료 참조.
 
 NUMERIC_COLUMNS = ("quantity", "price", "amount", "fee", "tax")
+
+#: 포지션 타임라인 (docs/schema.md §2) — core/engine 의 출력, (일자, 종목) 단위.
+TIMELINE_COLUMNS: list[str] = [
+    "date",  # date  거래일 (영업일만 — pykrx 캘린더 기준)
+    "ticker",  # str
+    "name",  # str
+    "quantity",  # int   그날 종가 기준 보유수량
+    "avg_cost",  # float 평단가 — 매입가중 이동평균, 매도 시 불변
+    "close",  # float 종가 (pykrx)
+    "unrealized_pnl",  # float (close - avg_cost) * quantity
+    "unrealized_pct",  # float close / avg_cost - 1
+    "realized_pnl",  # float 그날 실현손익. 매도 없으면 0
+    "holding_days",  # int   현재 episode 진입일로부터 경과 영업일 (진입일=0)
+    "episode_id",  # str   "{ticker}:{진입일}"
+]
+
+#: 포지션 에피소드 (docs/schema.md §3) — core/engine 의 출력.
+EPISODE_COLUMNS: list[str] = [
+    "episode_id",  # str        "{ticker}:{진입일}"
+    "ticker",  # str
+    "name",  # str
+    "opened_at",  # date       진입일
+    "closed_at",  # date|None  청산일. 미청산이면 None
+    "realized_pnl",  # float      episode 전체 실현손익 (부분매도 합산)
+    "max_unrealized_loss",  # float      기간 중 최대 평가손실 (음수, 없었으면 0)
+    "max_unrealized_loss_pct",  # float      위의 비율
+    "add_buy_count",  # int        진입 후 추가매수 횟수
+    "holding_days",  # int        보유 영업일수
+    "is_open",  # bool       미청산 여부
+]
+
+
+def empty_timeline() -> pd.DataFrame:
+    """빈 타임라인 (컬럼만 갖춘 상태)."""
+    return pd.DataFrame(columns=TIMELINE_COLUMNS)
+
+
+def empty_episodes() -> pd.DataFrame:
+    """빈 에피소드 표 (컬럼만 갖춘 상태)."""
+    return pd.DataFrame(columns=EPISODE_COLUMNS)
 
 
 @dataclass
