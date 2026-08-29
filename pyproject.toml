@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl>=3.1",       # 웹에서 받는 .xlsx
     "pyarrow>=16.0",       # 일봉 parquet 캐시
     "pykrx>=1.0.45",       # KRX 일봉
+    "anthropic>=0.34",     # LLM 가드레일 — 소형 고속 모델 호출
 ]
 
 [project.optional-dependencies]

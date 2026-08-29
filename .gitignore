@@ -11,3 +11,7 @@ __pycache__/
 .venv/
 .env
 .DS_Store
+
+# IDE 개인 설정 — 사람마다 다르고 코드와 무관, 노이즈만 발생시킴
+.idea/
+.vscode/
