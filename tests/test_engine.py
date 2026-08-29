@@ -127,52 +127,58 @@ def test_거래가_없으면_빈_결과를_돌려준다():
     assert list(result.episodes.columns) == schema.EPISODE_COLUMNS
 
 
+def _price_fn_for(mapping: dict[str, tuple[list[date], list[float]]]):
+    """{ticker: (날짜들, 종가들)} 을 받아 get_daily_close 자리를 대신할 함수를 만든다."""
+
+    def fn(ticker: str, start: date, end: date) -> pd.Series:
+        dates, closes = mapping[ticker]
+        return pd.Series(closes, index=pd.to_datetime(dates), name=ticker)
+
+    return fn
+
+
+def _buy_row(trade_id, traded_at, ticker, name, qty, price, row, amount=None):
+    return dict(
+        trade_id=trade_id,
+        traded_at=traded_at,
+        ticker=ticker,
+        name=name,
+        side="BUY",
+        quantity=qty,
+        price=price,
+        amount=amount if amount is not None else price * qty,
+        fee=0.0,
+        tax=0.0,
+        source="test",
+        source_row=row,
+        note="BUY",
+    )
+
+
 def test_한_종목만_거래정지여도_캐리포워드하고_경고를_남긴다(monkeypatch):
     """종목 2개 중 하나만 특정일 종가가 없으면(=거래정지 추정) 직전 종가를 이어붙인다."""
     d0, d1, d2, d3 = (date(2026, 2, i) for i in (2, 3, 4, 5))
 
-    def fake_prices(ticker: str, start: date, end: date) -> pd.Series:
-        if ticker == "AAA":
-            dates, closes = [d0, d1, d2, d3], [100.0, 110.0, 120.0, 130.0]
-        else:  # BBB — d2 에 거래정지로 종가 없음
-            dates, closes = [d0, d1, d3], [200.0, 205.0, 210.0]
-        return pd.Series(closes, index=pd.to_datetime(dates), name=ticker)
-
-    monkeypatch.setattr(engine_module, "get_daily_close", fake_prices)
+    monkeypatch.setattr(
+        engine_module,
+        "get_daily_close",
+        _price_fn_for(
+            {
+                "AAA": ([d0, d1, d2, d3], [100.0, 110.0, 120.0, 130.0]),
+                "BBB": ([d0, d1, d3], [200.0, 205.0, 210.0]),  # d2 에 거래정지로 종가 없음
+                engine_module.CALENDAR_ANCHOR_TICKER: (
+                    [d0, d1, d2, d3],
+                    [1.0, 1.0, 1.0, 1.0],
+                ),
+            }
+        ),
+    )
 
     trades = schema.coerce(
         pd.DataFrame(
             [
-                dict(
-                    trade_id="t:1",
-                    traded_at=d0,
-                    ticker="AAA",
-                    name="AAA종목",
-                    side="BUY",
-                    quantity=1,
-                    price=100.0,
-                    amount=100.0,
-                    fee=0.0,
-                    tax=0.0,
-                    source="test",
-                    source_row=1,
-                    note="BUY",
-                ),
-                dict(
-                    trade_id="t:2",
-                    traded_at=d0,
-                    ticker="BBB",
-                    name="BBB종목",
-                    side="BUY",
-                    quantity=1,
-                    price=200.0,
-                    amount=200.0,
-                    fee=0.0,
-                    tax=0.0,
-                    source="test",
-                    source_row=2,
-                    note="BUY",
-                ),
+                _buy_row("t:1", d0, "AAA", "AAA종목", 1, 100.0, 1),
+                _buy_row("t:2", d0, "BBB", "BBB종목", 1, 200.0, 2),
             ]
         )
     )
@@ -183,3 +189,166 @@ def test_한_종목만_거래정지여도_캐리포워드하고_경고를_남긴
     bbb = tl[tl["ticker"] == "BBB"].set_index("date")
     assert bbb.loc[d2, "close"] == pytest.approx(205.0)  # 직전 종가로 캐리포워드
     assert any("거래정지" in w and "BBB" in w for w in result.warnings)
+
+
+def test_거래내역에_종목이_1개뿐이어도_앵커_덕분에_거래정지를_잡는다(monkeypatch):
+    """CALENDAR_ANCHOR_TICKER 를 추가하기 전에는 종목이 1개뿐이면 비교 대상이 없어서
+    거래정지를 아예 못 잡았다 — 이제는 항상 앵커를 같이 조회해서 잡는다.
+    """
+    d0, d1, d2, d3 = (date(2026, 3, i) for i in (2, 3, 4, 5))
+
+    monkeypatch.setattr(
+        engine_module,
+        "get_daily_close",
+        _price_fn_for(
+            {
+                "CCC": ([d0, d1, d3], [50.0, 55.0, 60.0]),  # d2 에 거래정지
+                engine_module.CALENDAR_ANCHOR_TICKER: (
+                    [d0, d1, d2, d3],
+                    [1.0, 1.0, 1.0, 1.0],
+                ),
+            }
+        ),
+    )
+
+    trades = schema.coerce(pd.DataFrame([_buy_row("t:1", d0, "CCC", "CCC종목", 1, 50.0, 1)]))
+
+    result = build(trades, as_of=d3)
+
+    ccc = result.timeline.set_index("date")
+    assert ccc.loc[d2, "close"] == pytest.approx(55.0)  # 직전 종가로 캐리포워드
+    assert any("거래정지" in w and "CCC" in w for w in result.warnings)
+
+
+def test_부분매도_두번은_실현손익이_episode에_합산된다(monkeypatch):
+    """진입 10주 -> 부분매도 4주 -> 보유 -> 전량매도 6주. 평단가는 부분매도로 안 바뀐다."""
+    d0, d1, d2, d3 = (date(2026, 4, i) for i in (1, 2, 3, 4))
+    monkeypatch.setattr(
+        engine_module,
+        "get_daily_close",
+        _price_fn_for({TICKER: ([d0, d1, d2, d3], [100.0, 110.0, 90.0, 120.0])}),
+    )
+
+    trades = schema.coerce(
+        pd.DataFrame(
+            [
+                _buy_row("t:1", d0, TICKER, NAME, 10, 100.0, 1),
+                dict(
+                    trade_id="t:2",
+                    traded_at=d1,
+                    ticker=TICKER,
+                    name=NAME,
+                    side="SELL",
+                    quantity=4,
+                    price=110.0,
+                    amount=440.0,
+                    fee=0.0,
+                    tax=0.0,
+                    source="test",
+                    source_row=2,
+                    note="SELL",
+                ),
+                dict(
+                    trade_id="t:3",
+                    traded_at=d3,
+                    ticker=TICKER,
+                    name=NAME,
+                    side="SELL",
+                    quantity=6,
+                    price=120.0,
+                    amount=720.0,
+                    fee=0.0,
+                    tax=0.0,
+                    source="test",
+                    source_row=3,
+                    note="SELL",
+                ),
+            ]
+        )
+    )
+
+    result = build(trades, as_of=d3)
+    tl = result.timeline.set_index("date")
+
+    # 부분매도 후에도 평단가는 그대로 100 — "매도 시 불변" 규칙
+    assert tl.loc[d0, ["quantity", "avg_cost"]].tolist() == [10, 100.0]
+    assert tl.loc[d1, ["quantity", "avg_cost"]].tolist() == [6, 100.0]
+    assert tl.loc[d1, "realized_pnl"] == pytest.approx(40.0)  # 440 - 100*4
+    assert tl.loc[d2, "quantity"] == 6
+    assert d3 not in tl.index  # 전량매도로 청산 -> 그날은 행 없음
+
+    ep = result.episodes.iloc[0]
+    assert ep["closed_at"] == d3
+    # 누적 실현손익 = (440-100*4) + (720-100*6) = 40 + 120 = 160
+    assert ep["realized_pnl"] == pytest.approx(160.0)
+    assert ep["add_buy_count"] == 0  # 추가매수 없음 — 매도만 두 번
+
+
+def test_전량청산_후_재진입하면_별개의_episode_두개다(monkeypatch):
+    d0, d1, d2, d3, d4 = (date(2026, 5, i) for i in (1, 2, 3, 4, 5))
+    monkeypatch.setattr(
+        engine_module,
+        "get_daily_close",
+        _price_fn_for({TICKER: ([d0, d1, d2, d3, d4], [100.0, 110.0, 95.0, 90.0, 92.0])}),
+    )
+
+    trades = schema.coerce(
+        pd.DataFrame(
+            [
+                _buy_row("t:1", d0, TICKER, NAME, 5, 100.0, 1),
+                dict(
+                    trade_id="t:2",
+                    traded_at=d1,
+                    ticker=TICKER,
+                    name=NAME,
+                    side="SELL",
+                    quantity=5,
+                    price=110.0,
+                    amount=550.0,
+                    fee=0.0,
+                    tax=0.0,
+                    source="test",
+                    source_row=2,
+                    note="SELL",
+                ),
+                # d2 는 쉬고 d3 에 재진입
+                _buy_row("t:3", d3, TICKER, NAME, 3, 90.0, 3),
+            ]
+        )
+    )
+
+    result = build(trades, as_of=d4)
+
+    assert len(result.episodes) == 2
+    ep1, ep2 = result.episodes.iloc[0], result.episodes.iloc[1]
+    assert (ep1["opened_at"], ep1["closed_at"], ep1["is_open"]) == (d0, d1, False)
+    assert (ep2["opened_at"], ep2["closed_at"], ep2["is_open"]) == (d3, None, True)
+    assert ep1["episode_id"] != ep2["episode_id"]
+
+    tl = result.timeline.set_index("date")
+    assert d2 not in tl.index  # 청산~재진입 사이엔 포지션이 없다 — 행 없음
+    assert tl.loc[d3, "episode_id"] == ep2["episode_id"]
+
+
+def test_동일일_다중체결은_합치지_않고_전부_적용한다(monkeypatch):
+    """§6.3 제안 — 같은 날 두 번 사면 두 건 다 반영하고, 두 번째부터 추가매수로 센다."""
+    d0 = date(2026, 6, 1)
+    monkeypatch.setattr(engine_module, "get_daily_close", _price_fn_for({TICKER: ([d0], [100.0])}))
+
+    trades = schema.coerce(
+        pd.DataFrame(
+            [
+                _buy_row("t:1", d0, TICKER, NAME, 5, 100.0, 1, amount=500.0),
+                _buy_row("t:2", d0, TICKER, NAME, 3, 102.0, 2, amount=306.0),
+            ]
+        )
+    )
+
+    result = build(trades, as_of=d0)
+    tl = result.timeline.set_index("date")
+
+    # 두 건이 합쳐진 하루치 상태 하나만 기록 — 수량 8, 평단가 (500+306)/8 = 100.75
+    assert len(tl) == 1
+    assert tl.loc[d0, "quantity"] == 8
+    assert tl.loc[d0, "avg_cost"] == pytest.approx(100.75)
+    assert result.episodes.iloc[0]["add_buy_count"] == 1  # 두 번째 매수만 추가매수로 카운트

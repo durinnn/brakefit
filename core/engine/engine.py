@@ -20,10 +20,11 @@ A 가 다르게 결정하면 아래 세 지점만 고치면 된다 — 각 지�
      지표는 episodes 기준이라 문제없지만, "일별 실현손익" 을 보는 곳이 생기면
      이 지점을 다시 봐야 한다.
 
-거래정지 캐리포워드: "그 종목만 종가가 없는 날"을 알려면 다른 종목은 거래된 날인지가
-필요해서, 이번 실행에 등장한 전체 종목의 pykrx 날짜를 합쳐 기준 달력으로 쓴다.
-종목이 1개뿐이면 이 방식으론 거래정지를 구분 못 한다(비교 대상이 없어서) — 알려진
-단순화 지점.
+거래정지 캐리포워드: "그 종목만 종가가 없는 날"을 알려면 시장 전체가 연 날인지가
+필요하다. 이번 실행에 등장한 종목들 날짜의 합집합 + CALENDAR_ANCHOR_TICKER(초대형주,
+사실상 매 거래일 거래됨) 를 항상 같이 섞어서 기준 달력으로 쓴다 — 종목이 1개뿐인
+거래내역이어도 앵커 덕분에 거래정지를 구분할 수 있다. (초판에는 앵커가 없어서 종목
+1개면 못 잡는 한계가 있었다 — 이후 추가.)
 """
 
 from __future__ import annotations
@@ -36,12 +37,39 @@ import pandas as pd
 from core.schema import EPISODE_COLUMNS, TIMELINE_COLUMNS, empty_episodes, empty_timeline, validate
 from core.synth.prices import get_daily_close
 
+#: 기준 달력 앵커 — 삼성전자. 사실상 매 개장일 거래되므로, 거래내역에 종목이 1개뿐이어도
+#: "그날 시장이 열렸는지"를 이걸로 판단할 수 있다.
+CALENDAR_ANCHOR_TICKER = "005930"
+
 
 @dataclass
 class EngineResult:
     timeline: pd.DataFrame
     episodes: pd.DataFrame
     warnings: list[str] = field(default_factory=list)
+
+    def report(self) -> str:
+        """사람이 읽는 요약 — core/parser 의 ParseResult.report() 와 같은 패턴."""
+        lines = [
+            f"타임라인    : {len(self.timeline)}행",
+            f"episode     : {len(self.episodes)}건"
+            + (
+                f" (미청산 {int(self.episodes['is_open'].sum())}건)"
+                if not self.episodes.empty
+                else ""
+            ),
+        ]
+        if not self.episodes.empty:
+            lines.append(f"종목 수     : {self.episodes['ticker'].nunique()}개")
+            total_realized = self.episodes["realized_pnl"].sum()
+            lines.append(f"총 실현손익 : {total_realized:,.0f}원")
+        if self.warnings:
+            lines.append(f"경고        : {len(self.warnings)}건")
+            for w in self.warnings[:20]:
+                lines.append(f"  ! {w}")
+            if len(self.warnings) > 20:
+                lines.append(f"  ... 외 {len(self.warnings) - 20}개")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -76,9 +104,12 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
     tickers = sorted(trades["ticker"].dropna().unique())
     global_start = trades["traded_at"].min()
 
-    # 거래정지 감지용 기준 달력 — 이번에 등장한 모든 종목의 pykrx 거래일 합집합.
+    # 거래정지 감지용 기준 달력 — 등장한 종목 + 앵커 종목의 pykrx 거래일 합집합.
+    # 앵커를 안 섞으면 거래내역에 종목이 1개뿐일 때 "이 날이 거래정지인지 상장전인지
+    # 시장이 원래 휴장인지" 구분할 기준이 없어서 캐리포워드가 아예 동작 안 했다.
+    calendar_tickers = sorted({*tickers, CALENDAR_ANCHOR_TICKER})
     raw_prices: dict[str, dict[date, float]] = {}
-    for ticker in tickers:
+    for ticker in calendar_tickers:
         series = get_daily_close(ticker, global_start, as_of)
         raw_prices[ticker] = {ts.date(): float(v) for ts, v in series.items()}
     full_calendar = sorted({d for prices in raw_prices.values() for d in prices})
