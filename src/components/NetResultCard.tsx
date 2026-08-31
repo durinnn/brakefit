@@ -14,19 +14,37 @@ export default function NetResultCard({
   interventionCount,
   hitRate,
 }: NetResultCardProps) {
+  const isPositive = netBenefit >= 0;
+  const tone = isPositive ? "safe" : "risk";
+
   return (
-    <section className="rounded-2xl border border-safe/40 bg-gradient-to-b from-safe-dim/70 to-ink-900 p-6 text-center">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-safe-soft">
+    <section
+      className={`rounded-2xl border p-6 text-center ${
+        isPositive
+          ? "border-safe/40 bg-gradient-to-b from-safe-dim/70 to-ink-900"
+          : "border-risk/40 bg-gradient-to-b from-risk-dim/70 to-ink-900"
+      }`}
+    >
+      <p
+        className={`text-xs font-semibold uppercase tracking-[0.2em] ${
+          isPositive ? "text-safe-soft" : "text-risk-soft"
+        }`}
+      >
         Net · 방어한 순수익
       </p>
 
-      <p className="tabular mt-4 text-[44px] font-extrabold leading-none text-safe">
-        +{formatWon(netBenefit)}
+      <p
+        className={`tabular mt-4 text-[44px] font-extrabold leading-none text-${tone}`}
+      >
+        {formatWon(netBenefit)}
       </p>
 
       <p className="tabular mt-3 text-sm text-ink-300">
         투입 원금 대비{" "}
-        <span className="font-semibold text-safe-soft">+{netBenefitRate}%</span>
+        <span className={`font-semibold text-${tone}-soft`}>
+          {netBenefitRate >= 0 ? "+" : ""}
+          {netBenefitRate}%
+        </span>
       </p>
 
       <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-ink-700">
