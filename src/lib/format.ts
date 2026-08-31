@@ -11,6 +11,11 @@ export function formatManwon(value: number): string {
   return `${sign}${man.toLocaleString("ko-KR")}만`;
 }
 
+/** 소수점 둘째 자리까지, 셋째 자리에서 반올림 (예: 33.33333333333333 → 33.33) */
+export function formatScore(value: number): string {
+  return value.toFixed(2);
+}
+
 export function formatSigned(value: number, unit = ""): string {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toLocaleString("ko-KR")}${unit}`;

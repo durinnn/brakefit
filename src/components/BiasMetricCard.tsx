@@ -1,5 +1,5 @@
 import type { BiasMetric } from "@/lib/types";
-import { formatSigned } from "@/lib/format";
+import { formatScore, formatSigned } from "@/lib/format";
 import ProgressBar from "./ProgressBar";
 
 function toneOf(score: number): "safe" | "warn" | "risk" {
@@ -19,7 +19,7 @@ export default function BiasMetricCard({ metric }: { metric: BiasMetric }) {
         <h3 className="text-base font-semibold text-ink-100">{metric.name}</h3>
         <div className="flex items-baseline gap-1.5">
           <span className={`tabular text-2xl font-bold ${toneText}`}>
-            {metric.score}
+            {formatScore(metric.score)}
           </span>
           <span className="text-xs text-ink-500">/ 100</span>
         </div>

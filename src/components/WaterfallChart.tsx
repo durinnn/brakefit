@@ -16,7 +16,7 @@ type Row = {
   start: number;
   /** 막대 길이 (0~100) */
   length: number;
-  kind: "base" | "increase" | "decrease" | "total";
+  kind: "base" | "increase" | "decrease" | "neutral" | "total";
   valueLabel: string;
 };
 
@@ -24,6 +24,7 @@ const BAR_STYLE: Record<Row["kind"], string> = {
   base: "bg-ink-500",
   increase: "bg-risk",
   decrease: "bg-safe",
+  neutral: "bg-ink-500",
   total: "bg-ink-100",
 };
 
@@ -54,7 +55,7 @@ export default function WaterfallChart({
       detail: item.detail,
       start: clamp(Math.min(cursor, next)),
       length: clamp(Math.abs(item.value)),
-      kind: item.value >= 0 ? "increase" : "decrease",
+      kind: item.value > 0 ? "increase" : item.value < 0 ? "decrease" : "neutral",
       valueLabel: formatSigned(item.value),
     });
     cursor = next;
