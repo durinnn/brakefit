@@ -112,7 +112,12 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
     for ticker in calendar_tickers:
         series = get_daily_close(ticker, global_start, as_of)
         raw_prices[ticker] = {ts.date(): float(v) for ts, v in series.items()}
-    full_calendar = sorted({d for prices in raw_prices.values() for d in prices})
+    # as_of 이후 날짜는 여기서 한 번 더 걸러낸다 — get_daily_close 가 실수로(또는
+    # 캐시 오염으로) as_of 너머 데이터를 돌려줘도, 룩어헤드 금지(AGENTS.md 절대
+    # 규칙 1)가 이 필터 하나로 보장된다. core/backtest 가 "그 거래 시점까지만"
+    # 알 수 있는 상태를 재현하려고 as_of 를 과거로 좁혀 호출하는데, 그게 새는 순간
+    # 백테스트 수치 전체가 미래를 훔쳐본 게 된다 — 만든 김에 방어선을 하나 더 둔다.
+    full_calendar = sorted({d for prices in raw_prices.values() for d in prices if d <= as_of})
 
     warnings: list[str] = []
     timeline_rows: list[dict] = []
