@@ -29,6 +29,7 @@ from api.schemas import (
 )
 from core.backtest.backtest import run as run_backtest
 from core.engine.engine import build as build_engine
+from core.guard.guard import generate as generate_coaching
 from core.metrics import averaging_down, chasing, disposition
 from core.rules import engine as rules_engine
 from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
@@ -169,19 +170,32 @@ def simulate_order(persona_key: str, order_req: SimulateOrderRequest) -> Interve
 
     dominant = max(report.contributions, key=lambda c: c.score)
     dominant_metric = next((m for m in metric_results if m.key == dominant.key), None)
+
+    if report.should_intervene and dominant.evidence:
+        # 워터폴 순서(chasing → averaging_down → disposition)를 그대로 우선순위로 넘긴다 —
+        # guard.get_order_fallback() 이 triggered_keys[0] 을 최우선 룰로 취급한다.
+        triggered_keys = [c.key for c in report.contributions if c.triggered]
+        coaching = generate_coaching(
+            context="order_intervention",
+            evidence=dominant.evidence,
+            triggered_keys=triggered_keys,
+        )
+        headline, description = coaching.headline, coaching.body
+    elif dominant.triggered:
+        # 개별 룰은 트리거됐지만 합산 위험점수가 개입 기준(INTERVENE_THRESHOLD) 미만 —
+        # case_count 는 그대로 실제 이력 건수를 보여주므로 headline 이 "이력 없음"이라고
+        # 모순되게 말하지 않도록 분리해둔다.
+        headline = f"{BIAS_KEY_LABEL[dominant.key]} 이력이 있지만 위험 수준은 아님"
+        description = "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
+    else:
+        headline = "과거 패턴 이력 없음"
+        description = "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
+
     warning = PatternWarning(
-        headline=(
-            f"과거 {BIAS_KEY_LABEL[dominant.key]} 이력 {len(dominant_metric.evidence)}건"
-            if dominant_metric and dominant.triggered
-            else "과거 패턴 이력 없음"
-        ),
+        headline=headline,
         case_count=len(dominant_metric.evidence) if dominant_metric else 0,
         average_return=0.0,  # TODO: 지표 evidence 에 수익률 숫자가 아직 없음 (D/C 협의 필요)
-        description=(
-            dominant.evidence[0]["detail"]
-            if dominant.evidence
-            else "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
-        ),
+        description=description,
     )
 
     risk_score = report.risk_score
