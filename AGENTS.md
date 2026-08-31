@@ -14,7 +14,7 @@
 ## 명령어
 
 ```bash
-uv sync                       # 환경 구성
+uv sync --extra web           # 환경 구성 (api/ 가 fastapi 를 쓰므로 web extra 필수 — 그냥 uv sync 만 하면 tests/test_api.py 가 깨짐)
 uv run pytest                 # 전체 테스트
 uv run ruff format . && uv run ruff check --fix .   # 커밋 전 필수
 
@@ -22,6 +22,9 @@ python tools/inspect_export.py <증권사파일>          # export 구조 확인
 python tools/inspect_export.py <파일> --redact       # 공유용 마스킹 사본
 
 python tools/generate_synth_fixtures.py              # fixtures/synth/*.csv 재생성 (실 거래내역 없을 때 이걸로 개발)
+python tools/run_engine.py --persona disposition_prone   # engine 결과 확인 (--csv <파일> 도 가능)
+
+uv run uvicorn api.main:app --reload                 # API 서버 실행 (http://localhost:8000/docs)
 ```
 
 ## 폴더 오너십 — 자기 폴더 밖은 PR 리뷰 필수
@@ -102,10 +105,21 @@ GitHub Spec Kit 도입 · MCP 5개 이상 · ML 모델 학습
 - ⚠ `pyproject.toml` 에 `setuptools<81` 추가함(사전 논의 없이 — pykrx 가 요구하는
   `pkg_resources` 를 최신 setuptools 가 빼버려서 import 자체가 안 됐음, D-10 코드규칙
   "새 라이브러리 전 물어보기" 예외적으로 건너뜀). `uv.lock` 도 커밋함
-- ⬜ `core/backtest` · `api/` · `deploy/` — 미착수
+- ✅ `core/backtest` · `api/` — **D 오너십인데 D 무응답이라 B 가 대신 초안 작성,
+  `dev` 에 병합함** (`test-d-backtest` 브랜치 거쳐서). D 가 검토해서 갈아엎어도 됨.
+  물타기·추격매수(BUY) 만 v1 범위 — 처분효과(SELL)는 반사실 정의가 달라서 제외
+  (근거는 `core/backtest/backtest.py` 모듈 docstring). `api/` 는 FastAPI로
+  engine→metrics→rules→backtest 를 HTTP 로 노출, `web/`(lovulive)의 `types.ts`
+  형태에 맞춰 camelCase 로 응답 — `uv sync --extra web` 필요(위 명령어 참조)
+  ⚠ 백테스트를 synth 데이터로 실행해보니 물타기형/추격매수형 페르소나에서
+  net_benefit 이 음수로 나옴(이 기간 KRX 가 전반적 상승장이라, 편향과 무관하게
+  "더 사면 나중에 올라있을 확률"이 높아서) — 데모 기간 선택에 따라 헤드라인
+  숫자가 크게 흔들릴 수 있음, **기획서에 수치 넣기 전에 팀 논의 필요**
+- ⬜ `deploy/` — 미착수
 - ⚠ `web/` — 스켈레톤은 `lovulive` 브랜치에 있으나 **레포 히스토리와 무관한 별개
   브랜치(unrelated history)라 일반 병합이 안 됨** + 파일이 `web/` 이 아니라 레포
-  루트에 있어서(`AGENTS.md` 오너십과 불일치) 재구성 필요. D 확인 필요
+  루트에 있어서(`AGENTS.md` 오너십과 불일치) 재구성 필요. D 확인 필요 (보류 중 —
+  급하면 B 가 대신 재구성 가능)
 
 **실 거래내역 진행 상황**: 계좌 개설 후 첫 거래 발생 (2026-08-31) — 해외주식(미국,
 VolitionRx) 1건은 0112 화면에서 정상 파싱 확인(단, 해외주식이라 KRX ticker 없음 +
