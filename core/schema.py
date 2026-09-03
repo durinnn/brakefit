@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 import pandas as pd
@@ -143,6 +143,24 @@ def empty_trades() -> pd.DataFrame:
     return coerce(df)
 
 
+def _normalize_traded_at(col: pd.Series) -> pd.Series:
+    """체결일을 `datetime.date` 로 맞춘다 (§1 `traded_at` 은 date 라고 못박혀 있다).
+
+    `pd.read_csv(parse_dates=...)` 나 엑셀 파서를 거치면 체결일이 `datetime64` /
+    `pd.Timestamp` 로 들어온다. 이게 그대로 흘러가면 `core/engine` 이 pykrx 종가
+    인덱스(`ts.date()` 로 date 변환됨)와 체결일을 맞춰볼 때 `date != Timestamp` 라
+    하루치 거래가 통째로 매칭에 실패한다 — 에러 없이 그냥 "거래가 없던 날"이 돼서
+    조용히 틀린다. 여기서 한 번 정규화해두면 뒤에서 각자 우회할 필요가 없다.
+
+    date/None 같은 이미 정상인 값은 건드리지 않는다(idempotent). 날짜가 아닌 이상한
+    값을 NaT 로 뭉개지도 않는다 — 그건 `validate()` 가 잡을 일이다.
+    """
+    if pd.api.types.is_datetime64_any_dtype(col):
+        return col.dt.date
+    # object 컬럼에 Timestamp/datetime 이 섞여 들어오는 경우 (dict 로 직접 만든 DataFrame 등)
+    return col.map(lambda v: v.date() if isinstance(v, datetime) else v)
+
+
 def coerce(df: pd.DataFrame) -> pd.DataFrame:
     """컬럼 순서·dtype 을 표준에 맞춘다."""
     for col in TRADE_COLUMNS:
@@ -153,6 +171,7 @@ def coerce(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df["quantity"] = df["quantity"].astype("Int64")
     df["source_row"] = pd.to_numeric(df["source_row"], errors="coerce").astype("Int64")
+    df["traded_at"] = _normalize_traded_at(df["traded_at"])
     return df.reset_index(drop=True)
 
 
