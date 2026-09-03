@@ -65,13 +65,19 @@ def compute(timeline: pd.DataFrame, trades: pd.DataFrame, episodes: pd.DataFrame
         unrealized = snapshot.iloc[0]["unrealized_pnl"]
         if unrealized < 0:
             loss_add_buys += 1
-            detail = f"평가손실 {unrealized:,.0f}원 상태에서 {int(t['quantity'])}주 추가매수"
+            return_pct = round(float(snapshot.iloc[0]["unrealized_pct"]) * 100, 2)
+            detail = (
+                f"평가손실 {unrealized:,.0f}원({return_pct}%) 상태에서 "
+                f"{int(t['quantity'])}주 추가매수"
+            )
             evidence.append(
                 {
                     "trade_id": t["trade_id"],
                     "date": str(t["traded_at"].date()),
                     "name": t["name"],
                     "detail": detail,
+                    # 매수 시점 평가손익률(%). "그 이후 실제 수익률"이 아님
+                    "return_pct": return_pct,
                 }
             )
 
