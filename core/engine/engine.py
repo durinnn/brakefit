@@ -101,6 +101,16 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
         return EngineResult(timeline=empty_timeline(), episodes=empty_episodes(), warnings=[])
 
     as_of = as_of or date.today()
+    warnings: list[str] = []
+
+    # ticker 가 비어있는 행은 종목을 특정할 수 없어서 계산에서 빠진다(스키마상 정상 입력 —
+    # 파서가 화면에서 종목코드를 못 읽으면 None 으로 두고 resolve_tickers() 가 채우는 구조).
+    # 다만 조용히 사라지면 "왜 이 종목이 결과에 없지" 를 아무도 못 찾는다 — AGENTS.md
+    # "예외는 삼키지 않는다" 에 따라 버린 건수와 추정 원인을 남긴다.
+    unresolved = int(trades["ticker"].isna().sum())
+    if unresolved:
+        warnings.append(f"ticker 미해결 {unresolved}건 제외 (resolve_tickers() 미적용?)")
+
     tickers = sorted(trades["ticker"].dropna().unique())
     global_start = trades["traded_at"].min()
 
@@ -119,9 +129,9 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
     # 백테스트 수치 전체가 미래를 훔쳐본 게 된다 — 만든 김에 방어선을 하나 더 둔다.
     full_calendar = sorted({d for prices in raw_prices.values() for d in prices if d <= as_of})
 
-    warnings: list[str] = []
     timeline_rows: list[dict] = []
     episode_rows: list[dict] = []
+    used_episode_ids: set[str] = set()
 
     for ticker in tickers:
         ticker_trades = trades[trades["ticker"] == ticker].sort_values(["traded_at", "source_row"])
@@ -145,7 +155,7 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
                     if t["side"] == "BUY":
                         if ep is None:
                             ep = _EpisodeState(
-                                episode_id=f"{ticker}:{day}",
+                                episode_id=_unique_episode_id(f"{ticker}:{day}", used_episode_ids),
                                 ticker=ticker,
                                 name=name,
                                 opened_at=day,
@@ -156,19 +166,36 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
                         ep.quantity += int(t["quantity"])
                         ep.cost_basis += float(t["amount"])  # §6.1 제안
                     else:  # SELL
-                        if ep is None or ep.quantity <= 0:
+                        # 살아있는 ep 는 항상 quantity > 0 이다(아래 오버셀 클램프 때문에
+                        # 수량이 음수로 내려갈 수 없고, 0 이 되는 순간 청산하고 ep=None).
+                        # 그래서 여기 걸리는 건 "정말로 보유가 없는데 매도가 찍힌" 경우뿐.
+                        if ep is None:
                             warnings.append(
                                 f"{ticker}: {day} 보유 없이 매도 기록 — 데이터 이상, 건너뜀"
                             )
                             continue
                         avg_cost = ep.cost_basis / ep.quantity  # 이 매도 "직전" 평단가
-                        sell_qty = int(t["quantity"])
-                        piece = float(t["amount"]) - avg_cost * sell_qty
+                        raw_qty = int(t["quantity"])
+                        sell_qty = min(raw_qty, ep.quantity)
+                        # 오버셀 방어 — 보유수량보다 많이 판 기록(거래내역 일부 누락, 기간을
+                        # 잘라 받은 export 등)을 그대로 믿으면 없는 수량까지 실현손익이
+                        # 잡히고 cost_basis 가 음수가 된 채 폐기돼서 조용히 숫자가 틀어진다.
+                        # 보유분까지만 계상하고 초과분은 버리되, 버린 사실을 반드시 남긴다.
+                        if raw_qty > sell_qty:
+                            warnings.append(
+                                f"{ticker}: {day} 보유수량 {ep.quantity}주인데 매도 {raw_qty}주 — "
+                                f"보유분 {sell_qty}주까지만 실현손익에 반영하고 "
+                                f"초과 {raw_qty - sell_qty}주는 무시 (거래내역 누락 추정)"
+                            )
+                        # 정산금액도 반영한 수량 비율만큼만 인정한다 — 안 그러면 보유한 적
+                        # 없는 주식의 매도대금까지 실현손익에 섞인다.
+                        proceeds = float(t["amount"]) * sell_qty / raw_qty
+                        piece = proceeds - avg_cost * sell_qty
                         ep.realized_pnl += piece
                         day_realized += piece
                         ep.cost_basis -= avg_cost * sell_qty
                         ep.quantity -= sell_qty
-                        if ep.quantity <= 0:
+                        if ep.quantity == 0:
                             episode_rows.append(
                                 _episode_row(ep, closed_at=day, idx=idx, is_open=False)
                             )
@@ -224,6 +251,29 @@ def _episode_row(ep: _EpisodeState, closed_at: date | None, idx: int, is_open: b
         "holding_days": idx - ep.opened_idx,
         "is_open": is_open,
     }
+
+
+def _unique_episode_id(base: str, used: set[str]) -> str:
+    """episode_id 를 유일하게 만든다 — 같은 (종목, 진입일) 이 두 번 나오면 "#2" 부터 붙인다.
+
+    같은 날 전량청산하고 다시 들어가면 "{ticker}:{진입일}" 이 그대로 충돌한다(§6.3 이
+    동일일 다중체결을 합치지 않기로 확정했으니 실제로 일어날 수 있는 시나리오다).
+    충돌한 채 두면 timeline·episodes 의 episode_id 가 서로 다른 에피소드를 가리키면서
+    같은 값이 돼서, 이걸 키로 groupby/isin 하는 core/metrics·core/backtest 가 두
+    에피소드를 하나로 뭉갠다.
+
+    첫 에피소드는 접미사 없이 docs/schema.md §2·§3 의 "{ticker}:{진입일}" 형식을 그대로
+    유지한다. 하류(core/metrics, core/rules, core/backtest)는 episode_id 를 키로만 쓰고
+    형식을 파싱하지 않는 걸 확인했으므로 접미사가 붙어도 안전하다.
+    """
+    if base not in used:
+        used.add(base)
+        return base
+    n = 2
+    while f"{base}#{n}" in used:
+        n += 1
+    used.add(f"{base}#{n}")
+    return f"{base}#{n}"
 
 
 def _effective_calendar(
