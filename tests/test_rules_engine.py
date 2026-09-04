@@ -13,7 +13,7 @@
         → 물타기 발동: 22.05  (손실 중 추가매수)
         → 처분효과 미발동: 0 (SELL 아님)
         → risk_score = 38.0 + 22.05 + 0 = 60.05
-        → should_intervene = True (>= 50)
+        → should_intervene = True (룰 발동 + 점수 임계 둘 다 만족)
 
 손계산:
     chasing  40 × 0.95   = 38.00
@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 
 from core.metrics.base import MetricResult
-from core.rules.base import ProposedOrder
+from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
 from core.rules.engine import evaluate
 
 TIMELINE = pd.DataFrame(
@@ -120,8 +120,49 @@ def test_no_intervention_when_sell_benign():
 
 
 def test_no_metrics_gives_zero_risk():
-    """metric_results 가 빈 리스트이면 이력 없음 → 기여 0."""
+    """metric_results 가 빈 리스트이면 이력 없음 → 기여 0.
+
+    단 점수만 0 이고 룰 자체는 발동한다(급등가 + 손실 종목 추가매수). 개입 조건이
+    triggered 기준이라 should_intervene 은 True — 과거 이력이 없어도 지금 이 주문이
+    편향 패턴이면 알려주는 게 맞다는 판단(백테스트도 같은 기준으로 이 주문을 센다).
+    """
     report = evaluate(ORDER_CHASING_AND_AVG, [], TIMELINE, EPISODES)
 
+    assert report.risk_score == pytest.approx(0.0, abs=1e-6)
+    assert report.should_intervene is True
+
+
+# ── 개입 조건 = 룰 하나라도 triggered (2026-09-04 리더 결정) ──────────────────
+
+
+def test_single_rule_triggered_intervenes_below_threshold():
+    """룰 하나만 발동 + 합산 점수 < 50 이어도 개입한다.
+
+    SELL + 평가이익 → 처분효과만 발동. 상한이 25 라 점수로는 절대 50 을 못 넘는데,
+    예전 판정(점수 임계)에서는 이 때문에 매도 주문에 개입이 구조적으로 불가능했다.
+    """
+    profit_timeline = TIMELINE.assign(close=75_000, unrealized_pnl=50_000, unrealized_pct=0.071)
+    order = ProposedOrder(ticker="005930", name="삼성전자", side="SELL", quantity=5, price=75_000)
+
+    report = evaluate(order, METRICS, profit_timeline, EPISODES)
+
+    triggered = [c for c in report.contributions if c.triggered]
+    assert [c.key for c in triggered] == ["disposition_effect"]
+    assert report.risk_score < INTERVENE_THRESHOLD
+    assert report.should_intervene is True
+    # 지배 편향(API 가 팝업 문구에 쓰는 값)은 발동한 룰 중 기여 최대 = 처분효과
+    assert max(triggered, key=lambda c: c.score).key == "disposition_effect"
+
+
+def test_no_rule_triggered_does_not_intervene():
+    """아무 룰도 발동 안 하면 과거 지표가 아무리 높아도 개입 없음.
+
+    timeline 에 없는 종목 신규 매수 → 세 룰 전부 판단 근거가 없어 미발동.
+    """
+    order = ProposedOrder(ticker="000660", name="SK하이닉스", side="BUY", quantity=1, price=200_000)
+
+    report = evaluate(order, METRICS, TIMELINE, EPISODES)
+
+    assert all(c.triggered is False for c in report.contributions)
     assert report.risk_score == pytest.approx(0.0, abs=1e-6)
     assert report.should_intervene is False

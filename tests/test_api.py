@@ -97,8 +97,10 @@ def test_개입_엔드포인트():
         "suggestions",
     }
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
-    # 프론트가 riskLevel 로 개입 여부를 재유도하지 않도록 판정 결과를 그대로 싣는다
-    assert body["shouldIntervene"] is (body["riskLevel"] == "HIGH")
+    # 프론트가 riskLevel 로 개입 여부를 재유도하지 않도록 판정 결과를 그대로 싣는다.
+    # 개입 조건이 "룰 하나라도 발동" 이라(core/rules/engine.py) 둘은 더 이상 동치가
+    # 아니다 — 점수 임계는 OR 로 남아 있으므로 HIGH 면 반드시 개입이라는 방향만 성립한다.
+    assert body["riskLevel"] != "HIGH" or body["shouldIntervene"] is True
     assert len(body["contributions"]) == 3
     assert len(body["suggestions"]) >= 1
     assert set(body["warning"].keys()) == {"headline", "caseCount", "averageReturn", "description"}
@@ -112,9 +114,9 @@ def test_개입_엔드포인트():
 def test_매도_주문도_판정된다():
     """SELL 은 처분효과 룰(core/rules/disposition_rule)이 받는다 — 400 이 되면 안 된다.
 
-    ⚠ 다만 처분효과 룰의 MAX_CONTRIBUTION 은 25 라서, 매도만으로는 개입 임계
-    (INTERVENE_THRESHOLD=50)를 넘을 수 없다 → shouldIntervene 은 항상 False.
-    임계값 조정은 core/rules 오너(C) 판단 영역이라 여기서는 현 동작을 고정만 해둔다.
+    처분효과 룰의 MAX_CONTRIBUTION 은 25 라 점수로는 개입 임계(50)를 못 넘지만,
+    개입 조건이 "룰 하나라도 발동" 이라 평가이익 종목 매도는 개입 대상이 된다
+    (예전에는 매도 주문에 개입이 구조적으로 불가능했다).
     """
     r = client.post(
         "/api/simulate-order",
@@ -130,7 +132,34 @@ def test_매도_주문도_판정된다():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["order"]["side"] == "SELL"
-    assert body["shouldIntervene"] is False
+    assert body["shouldIntervene"] is True
+    assert body["riskScore"] < 50  # 점수 임계가 아니라 룰 발동으로 개입한 것이 맞는지
+    detail = {c["label"]: c for c in body["contributions"]}["처분효과"]
+    assert detail["value"] > 0
+
+
+def test_점수가_낮아도_룰이_발동하면_개입한다():
+    """데모 프리필 주문(web/src/lib/api.ts DEMO_ORDER)이 페르소나 5종 전부에서 팝업까지 간다.
+
+    기여식이 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라 합성 페르소나(한 축만 강함)는
+    50점에 못 닿는다 — 이 테스트가 깨지면 심사 시연에서 팝업이 안 뜬다는 뜻이다.
+    """
+    for persona in PRESETS:
+        r = client.post(
+            "/api/simulate-order",
+            params={"persona": persona},
+            json={
+                "ticker": "005930",
+                "name": "삼성전자",
+                "side": "BUY",
+                "quantity": 10,
+                "price": 290000,  # 캐시된 실제 종가(268,500원) 대비 +8% → 추격매수 발동
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["shouldIntervene"] is True, persona
+        assert body["riskScore"] < 50, persona  # 점수 임계였다면 안 떴을 주문
 
 
 # ── 주문 유니버스 ────────────────────────────────────────────────────────────

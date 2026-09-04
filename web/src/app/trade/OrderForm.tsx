@@ -138,12 +138,12 @@ export default function OrderForm({
   /**
    * ⚠ 개입 팝업 여부는 백엔드 판정(core/rules 의 should_intervene)만 따른다.
    *
-   * 알려진 제약: 현재 임계값(INTERVENE_THRESHOLD=50) 기준으로는 데모 페르소나 5종 ×
-   * DEMO_UNIVERSE 3종목 어떤 조합도 50점에 못 닿는다(실측 최대 29.57 — chasing_prone
-   * 이 전일 종가 +8% 로 매수). 룰 기여가 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라
-   * 두 룰이 동시에 세게 걸려야 넘는 구조인데, 합성 페르소나는 한 축만 강하기 때문이다.
-   * 임계값·기여식 조정은 core/rules 오너(C) 판단이라 여기서 riskLevel 로 우회하지
-   * 않는다 — 화면이 룰보다 느슨하게 판정하면 그게 더 큰 버그다.
+   * 개입 조건은 "룰 하나라도 발동"으로 바뀌었다(2026-09-04, 리더 결정). 예전에는
+   * risk_score >= 50 만 봤는데, 룰 기여가 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라
+   * 두 룰이 동시에 세게 걸려야 넘는 구조였고 합성 페르소나는 한 축만 강해서 데모
+   * 페르소나 5종 × DEMO_UNIVERSE 3종목 어떤 조합도 50점에 못 닿았다(실측 최대 29.57).
+   * 이제 발동한 룰이 있으면 점수가 낮아도 팝업이 뜬다 — 대신 riskLevel 은 여전히 점수
+   * 기반이라 "개입인데 LOW" 조합이 정상이다. riskLevel 로 팝업 여부를 재계산하지 말 것.
    */
   const intervening = report?.shouldIntervene === true;
 
