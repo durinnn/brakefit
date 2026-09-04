@@ -2,7 +2,9 @@ import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import ArcGauge from "@/components/ArcGauge";
 import BiasMetricCard from "@/components/BiasMetricCard";
+import DataSourceBadge from "@/components/DataSourceBadge";
 import { getDiagnosisReport } from "@/lib/api";
+import { getServerSession } from "@/lib/session.server";
 
 const GRADE_TONE = {
   안정: "safe",
@@ -11,11 +13,18 @@ const GRADE_TONE = {
 } as const;
 
 export default async function DashboardPage() {
-  const report = await getDiagnosisReport();
+  const session = await getServerSession();
+  const { data: report, source, sessionExpired } = await getDiagnosisReport(session);
   const tone = GRADE_TONE[report.overallGrade];
 
   return (
     <>
+      <DataSourceBadge
+        source={source}
+        tradeCount={report.totalTrades}
+        sessionExpired={sessionExpired}
+      />
+
       <PageHeader
         eyebrow="편향 건강검진"
         title="당신의 매매 습관 진단 결과"

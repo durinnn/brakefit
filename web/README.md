@@ -24,8 +24,28 @@ npm run typecheck
 | `/dashboard` | 진단 리포트 | 종합 편향 반원 게이지 + 3대 지표(처분효과·물타기·추격매수) 점수/상위 백분위 프로그레스 바 |
 | `/trade` | 모의 주문창 개입 | 상단 위험 게이지(0~100) · 중단 기여도 워터폴 차트 · 하단 붉은 경고 박스 + 멈추기/강행 액션 |
 | `/backtest` | 백테스트 증명 | 회피한 손실 ↔ 놓친 이익 대칭 비교, 최종 순수익(Net)을 최대 강조 |
+| `/upload` | 거래내역 업로드 | 증권사 파일(.csv/.xlsx/.xls) 업로드 → 세션 발급 → 위 3화면이 내 데이터로 전환 |
 
-`/`는 `/dashboard`로 리다이렉트됩니다.
+`/`는 `/dashboard`로 리다이렉트됩니다. 업로드 없이도 데모 페르소나로 전 화면이 동작합니다.
+
+## 데이터 소스 — 데모 페르소나 vs 업로드 세션
+
+`/upload`에서 파일을 올리면 백엔드가 `sessionId`를 주고, 이걸 **쿠키 `bf_session`**(path=/)에
+심습니다. 이후 `/api/*` 호출에 `?session=<sessionId>`가 붙고, 쿠키가 없으면 기존
+`?persona=chasing_prone`로 폴백합니다.
+
+localStorage가 아니라 쿠키인 이유: `/dashboard` · `/trade` · `/backtest`가 전부 async
+**서버 컴포넌트**라 렌더 시점에 세션을 알아야 하는데, 서버에서는 localStorage를 못 읽습니다.
+쿠키면 `next/headers`의 `cookies()`로 서버가 그대로 읽습니다.
+
+- 서버 읽기: `src/lib/session.server.ts` (`getServerSession`)
+- 클라이언트 읽기/쓰기/삭제: `src/lib/session.ts`
+- 세션이 만료돼 백엔드가 **404**를 주면 `api.ts`가 조용히 페르소나로 폴백하고
+  (`sessionExpired: true`), `DataSourceBadge`가 쿠키를 정리합니다 — 데모 중 Render가
+  재시작해도 화면이 죽지 않게.
+
+대시보드 상단 배지에서 현재 소스("데모 페르소나" / "내 거래내역 · N건")를 확인하고
+데모로 되돌릴 수 있습니다.
 
 ## 구조
 
@@ -37,7 +57,8 @@ src/
 │  ├─ page.tsx             # → /dashboard 리다이렉트
 │  ├─ dashboard/page.tsx
 │  ├─ trade/page.tsx
-│  └─ backtest/page.tsx
+│  ├─ backtest/page.tsx
+│  └─ upload/page.tsx      # 클라이언트 컴포넌트 (파일 입력)
 ├─ components/
 │  ├─ ArcGauge.tsx         # 반원 게이지 (SVG, 라이브러리 無)
 │  ├─ ProgressBar.tsx      # 0~100 가로 바
@@ -46,12 +67,15 @@ src/
 │  ├─ NetResultCard.tsx    # 순수익 강조 카드
 │  ├─ WarningBox.tsx       # 붉은 경고 박스
 │  ├─ BiasMetricCard.tsx
-│  ├─ InterventionActions.tsx  # 유일한 클라이언트 컴포넌트
+│  ├─ InterventionActions.tsx  # 클라이언트 컴포넌트
+│  ├─ DataSourceBadge.tsx  # 클라이언트 컴포넌트 (쿠키 정리·리셋)
 │  ├─ PageHeader.tsx
 │  └─ BottomNav.tsx
 └─ lib/
    ├─ types.ts             # 도메인 타입 (백엔드 스키마와 1:1 대응 목표)
    ├─ api.ts               # FastAPI 호출 (구 mockData.ts — 더미는 이미 걷어냄)
+   ├─ session.ts           # bf_session 쿠키 (클라이언트)
+   ├─ session.server.ts    # bf_session 쿠키 (서버, next/headers)
    └─ format.ts            # 표기 유틸
 ```
 

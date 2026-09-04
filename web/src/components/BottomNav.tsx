@@ -7,6 +7,7 @@ const TABS = [
   { href: "/dashboard", label: "진단" },
   { href: "/trade", label: "주문" },
   { href: "/backtest", label: "증명" },
+  { href: "/upload", label: "업로드" },
 ] as const;
 
 export default function BottomNav() {
@@ -14,7 +15,7 @@ export default function BottomNav() {
 
   return (
     <nav className="fixed bottom-0 z-20 w-full max-w-[430px] border-t border-ink-800 bg-ink-900/95 backdrop-blur">
-      <ul className="grid grid-cols-3">
+      <ul className="grid grid-cols-4">
         {TABS.map((tab) => {
           const active = pathname === tab.href;
           return (
