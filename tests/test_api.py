@@ -52,6 +52,7 @@ def test_진단_엔드포인트는_camelCase_필드로_응답한다():
         "generatedAt",
         "headline",
         "body",
+        "warnings",
     }
     assert body["overallGrade"] in ("안정", "주의", "위험")
     assert {m["key"] for m in body["metrics"]} == {"disposition", "averaging_down", "chasing"}
@@ -61,6 +62,14 @@ def test_진단_엔드포인트는_camelCase_필드로_응답한다():
     # ANTHROPIC_API_KEY 없는 테스트 환경이므로 core/guard 폴백 템플릿 그대로 나와야 함
     assert body["headline"]
     assert body["body"]
+
+
+def test_페르소나_진단은_경고가_비어있다():
+    """합성 거래는 엔진이 트집 잡을 데가 없다 — 여기에 뭔가 뜨면 생성기 쪽 버그다."""
+    for persona in ("disposition_prone", "chasing_prone", "mixed_realistic"):
+        body = client.get("/api/diagnose", params={"persona": persona}).json()
+        assert body["warnings"] == [], f"{persona}: {body['warnings']}"
+    assert client.get("/api/backtest", params={"persona": "chasing_prone"}).json()["warnings"] == []
 
 
 def test_모르는_페르소나는_404():
@@ -109,6 +118,7 @@ def test_백테스트_엔드포인트():
         "netBenefitRate",
         "hitRate",
         "cases",
+        "warnings",
     }
     for case in body["cases"]:
         assert case["biasKey"] in ("averaging_down", "chasing")
