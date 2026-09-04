@@ -15,6 +15,9 @@ session 이 있으면 persona 는 무시된다. 세션은 서버 메모리에만
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -32,7 +35,29 @@ from api.schemas import (
 )
 from core.synth.personas import PRESETS
 
-app = FastAPI(title="매매 브레이크 API", version="0.1.0-draft")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """기동 시 percentile 기준선을 미리 계산해둔다.
+
+    _reference_scores() 는 페르소나 5종을 전부 생성해서 engine·metrics 를 돌리므로
+    첫 호출이 무겁다. Render 무료 플랜은 유휴 시 슬립 → 콜드스타트라, 안 데워두면
+    시연 중 첫 /api/diagnose 가 그 비용을 그대로 뒤집어쓴다.
+
+    실패해도 서버는 떠야 한다(기준선은 percentile 장식용이고, 실패해도 _percentile()
+    이 50.0 폴백을 준다). 대신 사유 없이 삼키지는 않는다 — logging.exception 으로
+    스택을 남긴다(AGENTS.md "예외는 삼키지 않는다").
+    """
+    try:
+        service._reference_scores()
+    except Exception:
+        logger.exception("기준선 프리워밍 실패 — 첫 진단 요청에서 다시 시도된다")
+    yield
+
+
+app = FastAPI(title="매매 브레이크 API", version="0.1.0-draft", lifespan=lifespan)
 
 # lovulive(Next.js, 기본 3000번)가 로컬에서 바로 붙을 수 있게 — 배포 시 D 가 좁힐 것.
 app.add_middleware(
@@ -80,6 +105,18 @@ async def post_upload(file: Annotated[UploadFile, File()]) -> UploadSummary:
     KB증권 export(.xls/.xlsx) 와 표준 거래내역 CSV(docs/schema.md §1) 를 받는다.
     """
     content = await file.read()
+    # 파일은 이미 통째로 메모리에 올라와 있다 — 크기 검사를 여기서 하는 건 이번 요청을
+    # 막기 위해서가 아니라, 큰 파일이 세션에 눌러앉아 무료 인스턴스(512MB)를 계속
+    # 갉아먹는 걸 막기 위해서다. 상한 근거는 api/service.MAX_UPLOAD_BYTES 주석 참조.
+    if len(content) > service.MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"업로드 파일은 {service.MAX_UPLOAD_BYTES // 1024 // 1024}MB 이하만 허용됩니다 "
+                f"(받은 크기: {len(content) / 1024 / 1024:.1f}MB). "
+                "조회 기간을 좁혀서 다시 export 해주세요."
+            ),
+        )
     try:
         return service.ingest_upload(file.filename or "upload", content)
     except service.UploadRejected as exc:
