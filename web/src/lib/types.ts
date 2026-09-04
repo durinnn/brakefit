@@ -34,6 +34,11 @@ export interface DiagnosisReport {
   overallGrade: "안정" | "주의" | "위험";
   metrics: BiasMetric[];
   generatedAt: string;
+  /**
+   * 계산 중 사용자가 알아야 할 사실(보유수량보다 많은 매도 기록, 종목코드 미해결 등).
+   * 없으면 빈 배열. 구버전 백엔드 응답에는 아예 없을 수 있어 optional 이다.
+   */
+  warnings?: string[];
 }
 
 /** 위험 점수 기여도 워터폴의 단일 항목 */
@@ -121,4 +126,6 @@ export interface BacktestResult {
   /** 개입이 유효했던 비율 (%) */
   hitRate: number;
   cases: BlockedCase[];
+  /** DiagnosisReport.warnings 와 같은 목적 (백테스트가 건너뛴 매수 등) */
+  warnings?: string[];
 }
