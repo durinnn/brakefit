@@ -3,6 +3,7 @@ import PageHeader from "@/components/PageHeader";
 import ArcGauge from "@/components/ArcGauge";
 import BiasMetricCard from "@/components/BiasMetricCard";
 import DataSourceBadge from "@/components/DataSourceBadge";
+import WarningBanner from "@/components/WarningBanner";
 import { getDiagnosisReport } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
 
@@ -24,6 +25,9 @@ export default async function DashboardPage() {
         tradeCount={report.totalTrades}
         sessionExpired={sessionExpired}
       />
+
+      {/* 진단 숫자보다 먼저 보여야 한다 — 어떤 데이터로 계산된 점수인지가 먼저다 */}
+      <WarningBanner warnings={report.warnings ?? []} />
 
       <PageHeader
         eyebrow="편향 건강검진"

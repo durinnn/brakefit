@@ -93,6 +93,11 @@ def _period_label(trades: pd.DataFrame) -> str:
 # OOM 은 서비스 전체가 내려간다.
 _SESSIONS: OrderedDict[str, pd.DataFrame] = OrderedDict()
 
+# {session_id: 업로드 시점 경고}. _SESSIONS 와 같은 생애주기로 붙어 다닌다.
+# DataFrame 과 한 자료구조로 묶지 않은 건, 세션 저장소를 "표준 거래내역 그 자체"로
+# 보는 기존 코드·테스트(_SESSIONS[sid] 를 DataFrame 으로 읽음)를 깨지 않기 위해서다.
+_SESSION_WARNINGS: dict[str, list[str]] = {}
+
 #: 동시에 들고 있을 업로드 세션 수 상한. 데모 동시 사용자 규모(수 명)의 여유분이다.
 MAX_SESSIONS = 50
 
@@ -118,6 +123,10 @@ CSV_REQUIRED_COLUMNS = ("traded_at", "name", "side", "quantity", "price")
 #: ValueError 메시지와 pykrx/네트워크 계층 예외를 잡는다 — 나머지 예외는 그대로
 #: 올려보낸다(AGENTS.md "예외는 삼키지 않는다": 진짜 버그를 502 로 숨기지 않기 위함).
 _PRICE_ERROR_HINTS = ("pykrx", "시세", "종가")
+
+#: kb_hts.resolve_tickers() 가 "조회 실패 사유" 를 unresolved 에 끼워넣을 때 쓰는 접두어.
+#: 종목명과 구분하는 유일한 단서라 여기서 상수로 박아둔다(_fill_tickers 주석 참조).
+_TICKER_LOOKUP_FAILURE_PREFIX = "pykrx 조회 실패"
 
 
 class UploadRejected(ValueError):
@@ -146,12 +155,31 @@ def has_session(session_id: str) -> bool:
     return True
 
 
-def _store_session(session_id: str, trades: pd.DataFrame) -> None:
+def _store_session(session_id: str, trades: pd.DataFrame, warnings: list[str]) -> None:
     """세션 저장 + 상한 초과분(가장 오래 안 쓴 것부터) 정리."""
     _SESSIONS[session_id] = trades
+    _SESSION_WARNINGS[session_id] = list(warnings)
     _SESSIONS.move_to_end(session_id)
     while len(_SESSIONS) > MAX_SESSIONS:
-        _SESSIONS.popitem(last=False)
+        evicted, _ = _SESSIONS.popitem(last=False)
+        _SESSION_WARNINGS.pop(evicted, None)  # 같이 안 지우면 경고만 영원히 쌓인다
+
+
+def _merge_warnings(*groups: list[str]) -> list[str]:
+    """여러 단계의 경고를 순서 유지 + 중복 제거로 합친다.
+
+    업로드 시점 경고와 엔진 경고는 같은 사실을 다른 말로 두 번 적기도 하지만
+    (ticker 미해결 등), 문구가 완전히 같을 때만 접는다 — 다르게 적힌 두 줄은
+    각각 다른 정보를 담고 있어서 임의로 지우면 사용자가 사유를 잃는다.
+    """
+    seen: set[str] = set()
+    merged: list[str] = []
+    for group in groups:
+        for w in group:
+            if w not in seen:
+                seen.add(w)
+                merged.append(w)
+    return merged
 
 
 def _safe_filename(filename: str) -> str:
@@ -255,10 +283,22 @@ def _fill_tickers(trades: pd.DataFrame, warnings: list[str]) -> pd.DataFrame:
         if isinstance(ticker, str) and ticker
     }
     resolved, unresolved = kb_hts.resolve_tickers(trades, cache=cache)
-    if unresolved:
+    # resolve_tickers() 의 unresolved 는 두 종류가 한 리스트에 섞여서 온다 —
+    # 조회 자체가 실패한 사유("pykrx 조회 실패: ...") 와 진짜 못 찾은 종목명.
+    # 그대로 이어붙이면 "종목코드를 못 찾음: pykrx 조회 실패: ..., 삼성전자" 처럼
+    # 사유가 종목명인 것처럼 읽힌다. 파서는 B 소유라 손대지 않고 여기서 가른다.
+    lookup_failures = [u for u in unresolved if u.startswith(_TICKER_LOOKUP_FAILURE_PREFIX)]
+    missing_names = [u for u in unresolved if not u.startswith(_TICKER_LOOKUP_FAILURE_PREFIX)]
+    if lookup_failures:
+        warnings.append(
+            "시세 서버 조회 실패로 종목코드 자동 매핑 불가 — "
+            + "; ".join(lookup_failures)
+            + " (종목코드가 없는 거래는 진단·백테스트에서 제외됩니다)"
+        )
+    if missing_names:
         warnings.append(
             "종목코드를 못 찾음: "
-            + ", ".join(unresolved)
+            + ", ".join(missing_names)
             + " — 해당 종목은 진단·백테스트에서 제외됩니다 "
             "(0377 종목별주문/체결집계 export 로 코드 사전을 만들면 해결됩니다)"
         )
@@ -304,7 +344,7 @@ def ingest_upload(filename: str, content: bytes) -> UploadSummary:
         )
 
     session_id = uuid4().hex
-    _store_session(session_id, trades)
+    _store_session(session_id, trades, warnings)
     return UploadSummary(
         session_id=session_id,
         trade_count=len(trades),
@@ -343,6 +383,13 @@ def _resolve_trades(
         )
     _SESSIONS.move_to_end(session_id)  # 방금 쓴 세션이 LRU 에서 제일 늦게 밀리도록
     return trades, _session_as_of(trades), _session_universe(trades)
+
+
+def _upload_warnings(session_id: str | None) -> list[str]:
+    """업로드 시점 경고(파서 경고·ticker 미해결 등). 페르소나 경로는 항상 빈 목록이다."""
+    if session_id is None:
+        return []
+    return list(_SESSION_WARNINGS.get(session_id, []))
 
 
 def _guarded(fn, *args, **kwargs):
@@ -433,6 +480,9 @@ def diagnose(persona_key: str, *, session_id: str | None = None) -> DiagnosisRep
         generated_at=datetime.now().isoformat(timespec="seconds"),
         headline=coaching.headline,
         body=coaching.body,
+        # 업로드 시점 경고(파서·ticker) + 엔진 경고(과매도 클램프·시세 결측)를 같이 준다.
+        # 페르소나 경로는 둘 다 비어서 빈 배열로 나간다.
+        warnings=_merge_warnings(_upload_warnings(session_id), result.warnings),
     )
 
 
@@ -587,6 +637,7 @@ def backtest(persona_key: str, *, session_id: str | None = None) -> BacktestResu
             )
             for c in result.cases
         ],
+        warnings=_merge_warnings(_upload_warnings(session_id), result.warnings),
     )
 
 

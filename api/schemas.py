@@ -53,6 +53,10 @@ class DiagnosisReport(CamelModel):
     # 아직 이 두 필드가 없음 — D 와 필드명 맞춘 뒤 프론트 표시 붙일 것.
     headline: str
     body: str
+    #: 계산 과정에서 사용자가 알아야 할 사실(과매도 클램프·ticker 미해결 등).
+    #: 이걸 안 실으면 "내 거래 일부가 빠진 채 계산됐다" 를 사용자가 알 방법이 없다 —
+    #: 엔진 경고가 서버 로그에만 남아서 화면상으로는 정상 결과와 구분이 안 된다.
+    warnings: list[str] = []
 
 
 class RiskContribution(CamelModel):
@@ -103,6 +107,8 @@ class BacktestResult(CamelModel):
     net_benefit_rate: float = Field(serialization_alias="netBenefitRate")
     hit_rate: float = Field(serialization_alias="hitRate")
     cases: list[BlockedCase]
+    #: DiagnosisReport.warnings 와 같은 목적. 백테스트가 건너뛴 매수가 있으면 여기로 온다.
+    warnings: list[str] = []
 
 
 class PersonaInfo(CamelModel):

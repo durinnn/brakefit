@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -237,6 +238,76 @@ def test_오버셀은_엔진이_경고하고_보유분까지만_계상한다():
 def test_오버셀_세션도_진단까지_돈다():
     session_id = _upload("standard_oversell.csv").json()["sessionId"]
     _assert_diagnosable(session_id)
+
+
+def test_오버셀_경고는_진단_응답에도_실린다():
+    """엔진이 잘라낸 사실이 EngineResult.warnings 에만 남으면 사용자는 알 수가 없다.
+
+    업로드 자체는 경고가 없는(스키마상 정상인) 파일이므로, 여기 뜨는 경고는
+    전적으로 엔진이 계산 중에 발견한 것이다.
+    """
+    upload_body = _upload("standard_oversell.csv").json()
+    assert upload_body["warnings"] == []
+
+    body = _diagnose(upload_body["sessionId"]).json()
+    assert any("보유수량 15주인데 매도 20주" in w for w in body["warnings"])
+
+
+def test_KB_0112_은_업로드_경고가_진단_응답으로_이어진다(stub_ticker_lookup):
+    """업로드 시점 경고(ticker 미해결) + 엔진 경고(그 종목 제외)가 같이 나와야 한다."""
+    upload_body = _upload("kb_0112_sample.csv").json()
+    body = _diagnose(upload_body["sessionId"]).json()
+
+    for w in upload_body["warnings"]:
+        assert w in body["warnings"]
+    assert any("가나다반도체" in w for w in body["warnings"])
+    assert any("ticker 미해결 1건" in w for w in body["warnings"])
+    assert len(body["warnings"]) == len(set(body["warnings"]))  # 중복 없이
+
+
+# ── _fill_tickers 경고 분리 ──────────────────────────────────────────────────
+
+
+def test_시세_조회_실패는_미해결_종목명과_섞이지_않는다(monkeypatch):
+    """resolve_tickers() 는 조회 실패 사유와 종목명을 한 리스트에 섞어서 돌려준다.
+
+    그대로 이어붙이면 "종목코드를 못 찾음: pykrx 조회 실패: ..., 삼성전자" 가 돼서
+    실패 사유가 종목명인 것처럼 읽힌다. 파서(B 소유)는 그대로 두고 api 에서 가른다.
+    """
+
+    def fake_resolve(trades, *, cache=None, use_pykrx=True):
+        out = trades.copy()
+        out["ticker"] = None
+        return out, ["pykrx 조회 실패: HTTPError('KRX 응답 없음')", "삼성전자"]
+
+    monkeypatch.setattr(kb_hts, "resolve_tickers", fake_resolve)
+
+    trades = pd.DataFrame({"name": ["삼성전자"], "ticker": [None]})
+    warnings: list[str] = []
+    service._fill_tickers(trades, warnings)
+
+    assert len(warnings) == 2
+    failure, missing = warnings
+    assert failure.startswith("시세 서버 조회 실패로 종목코드 자동 매핑 불가")
+    assert "KRX 응답 없음" in failure
+    assert missing.startswith("종목코드를 못 찾음: 삼성전자 —")
+    assert "pykrx" not in missing
+
+
+def test_조회는_됐는데_못_찾은_종목만_있으면_경고가_한_줄이다(monkeypatch):
+    def fake_resolve(trades, *, cache=None, use_pykrx=True):
+        out = trades.copy()
+        out["ticker"] = None
+        return out, ["가나다반도체"]
+
+    monkeypatch.setattr(kb_hts, "resolve_tickers", fake_resolve)
+
+    trades = pd.DataFrame({"name": ["가나다반도체"], "ticker": [None]})
+    warnings: list[str] = []
+    service._fill_tickers(trades, warnings)
+
+    assert len(warnings) == 1
+    assert warnings[0].startswith("종목코드를 못 찾음: 가나다반도체 —")
 
 
 # ── ④ broken_columns.csv — 헤더가 엉뚱한 파일 ────────────────────────────────
