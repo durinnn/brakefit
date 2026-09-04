@@ -2,9 +2,19 @@
 
 import { useState } from "react";
 
+export type InterventionDecision = "stopped" | "forced";
+
 interface InterventionActionsProps {
   suggestions: string[];
   riskScore: number;
+  /**
+   * 결정이 내려졌을 때 부모에게 알린다. 넘기면 아래 결과 패널을 이 컴포넌트가
+   * 직접 띄우지 않는다 — /trade 는 결정 즉시 개입 모달을 닫고 주문 폼 쪽에서
+   * 결과를 보여주기 때문에, 사라질 패널을 한 프레임 그리는 걸 피한다.
+   */
+  onDecision?: (decision: InterventionDecision) => void;
+  /** 강행 확인 버튼 문구. 매도 주문이면 "그래도 매도" 처럼 바꿔 넘긴다. */
+  confirmLabel?: string;
 }
 
 /**
@@ -14,11 +24,21 @@ interface InterventionActionsProps {
 export default function InterventionActions({
   suggestions,
   riskScore,
+  onDecision,
+  confirmLabel = "그래도 매수",
 }: InterventionActionsProps) {
   const [confirming, setConfirming] = useState(false);
-  const [decision, setDecision] = useState<"none" | "stopped" | "forced">(
+  const [decision, setDecision] = useState<"none" | InterventionDecision>(
     "none",
   );
+
+  function decide(next: InterventionDecision) {
+    if (onDecision) {
+      onDecision(next);
+      return;
+    }
+    setDecision(next);
+  }
 
   if (decision === "stopped") {
     return (
@@ -76,7 +96,7 @@ export default function InterventionActions({
 
       <button
         type="button"
-        onClick={() => setDecision("stopped")}
+        onClick={() => decide("stopped")}
         className="w-full rounded-xl bg-ink-100 py-4 text-base font-bold text-ink-950 transition-opacity hover:opacity-90"
       >
         멈추기 · 24시간 뒤 다시 보기
@@ -100,10 +120,10 @@ export default function InterventionActions({
             </button>
             <button
               type="button"
-              onClick={() => setDecision("forced")}
+              onClick={() => decide("forced")}
               className="flex-1 rounded-lg bg-risk py-2.5 text-sm font-semibold text-ink-950"
             >
-              그래도 매수
+              {confirmLabel}
             </button>
           </div>
         </div>

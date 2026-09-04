@@ -77,12 +77,39 @@ export interface InterventionReport {
   /** 0~100 위험 게이지 */
   riskScore: number;
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  /**
+   * 개입 팝업을 띄울지의 판정 결과(백엔드 core/rules 가 정한다).
+   * riskLevel 로 재계산하지 말 것 — 임계값은 룰 쪽에만 있어야 한다.
+   */
+  shouldIntervene: boolean;
   /** 워터폴 시작점 (기준 위험도) */
   baseScore: number;
   contributions: RiskContribution[];
   warning: PatternWarning;
   /** 시스템이 제안하는 대안 행동 */
   suggestions: string[];
+}
+
+/** 모의 주문 폼에서 고를 수 있는 종목 (GET /api/universe 응답 항목) */
+export interface UniverseItem {
+  ticker: string;
+  name: string;
+  /**
+   * 기준일(as_of) 이하의 마지막 종가. 주문 폼의 예상 체결가 기본값으로 쓴다.
+   * 시세를 못 구했으면 null — 임의의 값으로 채우지 않는다.
+   */
+  lastClose: number | null;
+  /** lastClose 가 찍힌 날짜 (YYYY-MM-DD). lastClose 가 null 이면 같이 null */
+  lastDate: string | null;
+}
+
+/** 클라이언트가 POST /api/simulate-order 로 보내는 모의 주문 */
+export interface OrderInput {
+  ticker: string;
+  name: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  price: number;
 }
 
 /** 거래내역 업로드 결과 (POST /api/upload 응답) */

@@ -5,6 +5,7 @@ DEMO_AS_OF 가 캐시 범위 안이라 네트워크 없이 재현된다.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -89,12 +90,15 @@ def test_개입_엔드포인트():
         "order",
         "riskScore",
         "riskLevel",
+        "shouldIntervene",
         "baseScore",
         "contributions",
         "warning",
         "suggestions",
     }
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
+    # 프론트가 riskLevel 로 개입 여부를 재유도하지 않도록 판정 결과를 그대로 싣는다
+    assert body["shouldIntervene"] is (body["riskLevel"] == "HIGH")
     assert len(body["contributions"]) == 3
     assert len(body["suggestions"]) >= 1
     assert set(body["warning"].keys()) == {"headline", "caseCount", "averageReturn", "description"}
@@ -103,6 +107,71 @@ def test_개입_엔드포인트():
     # 어느 룰이 dominant 인지에 따라 부호가 갈리므로 여기서는 존재 여부만 확인한다
     if body["warning"]["caseCount"] == 0:
         assert body["warning"]["averageReturn"] == 0.0
+
+
+def test_매도_주문도_판정된다():
+    """SELL 은 처분효과 룰(core/rules/disposition_rule)이 받는다 — 400 이 되면 안 된다.
+
+    ⚠ 다만 처분효과 룰의 MAX_CONTRIBUTION 은 25 라서, 매도만으로는 개입 임계
+    (INTERVENE_THRESHOLD=50)를 넘을 수 없다 → shouldIntervene 은 항상 False.
+    임계값 조정은 core/rules 오너(C) 판단 영역이라 여기서는 현 동작을 고정만 해둔다.
+    """
+    r = client.post(
+        "/api/simulate-order",
+        params={"persona": "disposition_prone"},
+        json={
+            "ticker": "005930",
+            "name": "삼성전자",
+            "side": "SELL",
+            "quantity": 5,
+            "price": 280000,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["order"]["side"] == "SELL"
+    assert body["shouldIntervene"] is False
+
+
+# ── 주문 유니버스 ────────────────────────────────────────────────────────────
+
+
+def test_유니버스_페르소나():
+    """페르소나 유니버스는 DEMO_UNIVERSE 그대로 + 종가는 DEMO_AS_OF 이하여야 한다."""
+    r = client.get("/api/universe", params={"persona": "chasing_prone"})
+    assert r.status_code == 200, r.text
+    items = r.json()
+
+    assert {i["ticker"] for i in items} == set(service.DEMO_UNIVERSE)
+    for item in items:
+        assert set(item.keys()) == {"ticker", "name", "lastClose", "lastDate"}
+        assert item["name"] == service.DEMO_UNIVERSE[item["ticker"]]
+        # 커밋된 시세 캐시가 DEMO_AS_OF 를 덮으므로 여기서는 종가가 반드시 나온다
+        assert item["lastClose"] is not None and item["lastClose"] > 0
+        # 룩어헤드 금지 — 기준일 다음 날 종가를 폼 기본값으로 흘리면 안 된다
+        assert date.fromisoformat(item["lastDate"]) <= service.DEMO_AS_OF
+
+
+def test_유니버스_세션(csv_session):
+    """세션 유니버스는 그 사람이 실제 거래한 종목 + 종가는 마지막 체결일 이하."""
+    r = client.get("/api/universe", params={"session": csv_session})
+    assert r.status_code == 200, r.text
+    items = r.json()
+    assert items
+
+    trades = service._SESSIONS[csv_session]
+    assert {i["ticker"] for i in items} == {str(t) for t in trades["ticker"].dropna()}
+
+    as_of = max(trades["traded_at"].dropna())
+    for item in items:
+        if item["lastDate"] is None:
+            continue  # 캐시에 없는 종목은 시세 없이 null 로 나가는 게 정상이다
+        assert date.fromisoformat(item["lastDate"]) <= as_of
+
+
+def test_유니버스도_모르는_세션은_404():
+    assert client.get("/api/universe", params={"session": "없는세션"}).status_code == 404
+    assert client.get("/api/universe", params={"persona": "does_not_exist"}).status_code == 404
 
 
 def test_백테스트_엔드포인트():
