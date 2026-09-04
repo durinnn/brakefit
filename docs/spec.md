@@ -75,7 +75,14 @@ TODO
 ### 5.4 종합 점수와 백분위
 - 가중치 40/35/25 (`core/rules` MAX_CONTRIBUTION 재사용)
 - 백분위 기준선: 합성 페르소나 5종 분포 — **실사용자 분포 아님**(각주 필수)
-- TODO: 합리형 페르소나 chasing 기준선 50.00 원인·처리
+- ~~TODO: 합리형 페르소나 chasing 기준선 50.00 원인·처리~~ → 처리 완료.
+  원인 둘: (1) `core/metrics/chasing.py`가 같은 종목의 청산된 이전 에피소드 종가를
+  전일가로 잘못 참조 — `episode_id`로 스코프 제한해 수정. (2) 기준선 계산이
+  3종목·40episode짜리 표본이라 판정 가능한 매수가 seed당 0~8건까지 떨어져 점수가
+  0~100을 오감 — 기준선 계산만 8종목·300episode(frontier 포화 지점 이상)로 넓혀
+  분산 완화(`api/service.py` `_reference_scores`, `_REFERENCE_UNIVERSE`). 표본이
+  여전히 작아(seed당 표준편차 상당) 백분위는 참고용 이상은 아님 — §5.4 상단 각주와
+  동일한 한계.
 
 ## 6. 브레이크 룰 [C]
 

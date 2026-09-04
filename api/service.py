@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import tempfile
 from collections import OrderedDict
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -47,7 +48,7 @@ from core.parser import kb_hts
 from core.parser.reader import UnreadableExport
 from core.rules import engine as rules_engine
 from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
-from core.synth.generator import generate_trades
+from core.synth.generator import DEFAULT_UNIVERSE, generate_trades
 from core.synth.personas import NOT_REAL_USER_DISCLAIMER, PRESETS
 
 METRIC_MODULES = (disposition, averaging_down, chasing)
@@ -415,6 +416,20 @@ def _grade(score: float) -> str:
 # ── percentile 기준선 ────────────────────────────────────────────────────────
 # ⚠ NOT_REAL_USER_DISCLAIMER — 프리셋 5종(n=5)짜리 기준이라 percentile 은 장식에
 # 가깝다. 실 사용자 데이터가 쌓이면 거기서 다시 만들 것.
+#
+# chasing 은 "5%+ 급등 중 보유 종목 추가매수"라는 희소 이벤트라, DEMO_UNIVERSE(3종목)
+# ·n_episodes=40 조합으로는 판정 가능한 표본이 seed 하나당 0~8건까지 떨어져서 점수가
+# 0~100 사이를 극단적으로 오간다(core/metrics/chasing.py 의 episode 스코핑 버그를
+# 고치고 나서 드러남). n_episodes 만 올려선 부족하다 — 종목 3개짜리 9개월 시세로는
+# episode 를 아무리 요청해도 10~12개에서 frontier 가 막혀 포화한다(각 종목의 남은
+# 시세 구간을 다 써버림). 기준선 계산에서만 8종목(core/synth/generator.DEFAULT_UNIVERSE,
+# data/cache/prices/ 에 전부 캐시돼 있어 네트워크 불필요)으로 넓혀서 포화 지점을
+# 17~38 episode 로 올린다. PRESETS·DEMO_UNIVERSE 자체(데모 대시보드가 쓰는 단일
+# 페르소나 응답)는 응답속도 때문에 그대로 둔다 — 이 함수는 서버 기동 시 한 번
+# 프리워밍되고 이후 캐시된 값을 쓴다.
+_REFERENCE_UNIVERSE = DEFAULT_UNIVERSE
+_REFERENCE_N_EPISODES = 300  # frontier 포화 지점(17~38)보다 훨씬 크게 잡아 항상 포화되게 함
+
 _reference_cache: dict[str, list[float]] | None = None
 
 
@@ -425,7 +440,8 @@ def _reference_scores() -> dict[str, list[float]]:
 
     scores: dict[str, list[float]] = {"disposition_effect": [], "averaging_down": [], "chasing": []}
     for persona in PRESETS.values():
-        trades = generate_trades(persona, tickers=DEMO_UNIVERSE, end=DEMO_AS_OF)
+        ref_persona = replace(persona, n_episodes=_REFERENCE_N_EPISODES)
+        trades = generate_trades(ref_persona, tickers=_REFERENCE_UNIVERSE, end=DEMO_AS_OF)
         result = build_engine(trades, as_of=DEMO_AS_OF)
         for mod in METRIC_MODULES:
             r = mod.compute(result.timeline, trades, result.episodes)
