@@ -1,0 +1,13 @@
+trade_id,traded_at,ticker,name,side,quantity,price,amount,fee,tax,source,source_row,note
+upload:standard_basic:1,2026-06-02,005930,삼성전자,BUY,10,360500,3605541,541,0,upload_mock,1,현금매수
+upload:standard_basic:2,2026-06-09,035420,NAVER,BUY,5,257000,1285193,193,0,upload_mock,2,현금매수
+upload:standard_basic:3,2026-06-16,035720,카카오,BUY,50,40450,2022803,303,0,upload_mock,3,현금매수
+upload:standard_basic:4,2026-06-23,005930,삼성전자,BUY,10,310000,3100465,465,0,upload_mock,4,현금매수
+upload:standard_basic:5,2026-07-02,035420,NAVER,BUY,5,199900,999500,,,upload_mock,5,현금매수
+upload:standard_basic:6,2026-07-09,035720,카카오,BUY,50,33650,1682752,252,0,upload_mock,6,현금매수
+upload:standard_basic:7,2026-07-23,035420,NAVER,SELL,5,220000,1097855,165,1980,upload_mock,7,현금매도
+upload:standard_basic:8,2026-07-28,005930,삼성전자,SELL,12,220000,2634852,396,4752,upload_mock,8,현금매도
+upload:standard_basic:9,2026-08-04,035420,NAVER,BUY,4,226500,906136,136,0,upload_mock,9,현금매수
+upload:standard_basic:10,2026-08-11,035720,카카오,SELL,100,40700,4062063,611,7326,upload_mock,10,현금매도
+upload:standard_basic:11,2026-08-12,035420,NAVER,SELL,4,215500,860319,129,1552,upload_mock,11,현금매도
+upload:standard_basic:12,2026-08-13,005930,삼성전자,SELL,8,268000,2144000,,,upload_mock,12,현금매도
