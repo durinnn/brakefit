@@ -1,7 +1,7 @@
 import PageHeader from "@/components/PageHeader";
 import ComparisonBar from "@/components/ComparisonBar";
 import NetResultCard from "@/components/NetResultCard";
-import { getBacktestResult } from "@/lib/mockData";
+import { getBacktestResult } from "@/lib/api";
 import { formatWon } from "@/lib/format";
 import type { BiasKey } from "@/lib/types";
 

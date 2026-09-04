@@ -2,7 +2,7 @@ import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import ArcGauge from "@/components/ArcGauge";
 import BiasMetricCard from "@/components/BiasMetricCard";
-import { getDiagnosisReport } from "@/lib/mockData";
+import { getDiagnosisReport } from "@/lib/api";
 
 const GRADE_TONE = {
   안정: "safe",

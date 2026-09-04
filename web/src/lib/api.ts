@@ -1,8 +1,8 @@
 /**
  * FastAPI 연동 완료 (test-d-web-wire, B 작업 — D 검토용).
  *
- * 원래 여기 있던 MOCK_* 더미는 삭제하고, README 에 D 가 남겨둔 계획대로
- * fetch 로 교체했다. 컴포넌트는 한 줄도 안 건드림.
+ * 원래 여기 있던 MOCK_* 더미는 삭제하고 fetch 로 교체했다(컴포넌트는 한 줄도 안 건드림).
+ * 내용이 전부 실제 API 호출이라 파일명도 mockData.ts → api.ts 로 맞췄다.
  *
  * ⚠ 엔드포인트 경로는 README 의 제안(`/reports/diagnosis` 등)이 아니라
  * api/main.py(FastAPI, dev 브랜치)에 실제로 구현된 `/api/*` 경로를 그대로 썼다 —

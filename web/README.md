@@ -3,7 +3,7 @@
 2030 신규 주식 투자자의 행동 편향을 수치화하고, 무리한 매매 직전에 개입하는 서비스의 프론트엔드 스켈레톤.
 
 - **스택:** Next.js 15 (App Router) · TypeScript · Tailwind CSS 3
-- **데이터:** 전부 더미. `src/lib/mockData.ts` 한 곳에서만 관리
+- **데이터:** FastAPI(`api/`) 호출. `src/lib/api.ts` 한 곳에서만 관리
 - **레이아웃:** 모바일 MTS 채널 기준으로 최대 430px 폭 고정
 
 ## 실행
@@ -51,7 +51,7 @@ src/
 │  └─ BottomNav.tsx
 └─ lib/
    ├─ types.ts             # 도메인 타입 (백엔드 스키마와 1:1 대응 목표)
-   ├─ mockData.ts          # ⚠️ 임시 더미 — 연동 시 이 파일만 교체
+   ├─ api.ts               # FastAPI 호출 (구 mockData.ts — 더미는 이미 걷어냄)
    └─ format.ts            # 표기 유틸
 ```
 
@@ -60,7 +60,7 @@ src/
 컴포넌트는 데이터 출처를 전혀 모릅니다. 세 개의 async 함수 본문만 바꾸면 됩니다.
 
 ```ts
-// src/lib/mockData.ts → src/lib/api.ts 로 이름을 바꿔도 무방
+// src/lib/api.ts (구 src/lib/mockData.ts)
 export async function getDiagnosisReport(): Promise<DiagnosisReport> {
   const res = await fetch(`${API_BASE}/reports/diagnosis`, { cache: "no-store" });
   if (!res.ok) throw new Error("진단 리포트 조회 실패");

@@ -2,7 +2,7 @@ import ArcGauge from "@/components/ArcGauge";
 import WaterfallChart from "@/components/WaterfallChart";
 import WarningBox from "@/components/WarningBox";
 import InterventionActions from "@/components/InterventionActions";
-import { getInterventionReport } from "@/lib/mockData";
+import { getInterventionReport } from "@/lib/api";
 import { formatWon } from "@/lib/format";
 
 const LEVEL_TONE = {
