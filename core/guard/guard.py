@@ -20,6 +20,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 from core.guard.templates import get_order_fallback, get_report_fallback
@@ -76,6 +77,18 @@ def _build_user_prompt(context: str, evidence: list[dict], triggered_keys: list[
     )
 
 
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """haiku 가 "다른 텍스트는 출력하지 마세요" 지시를 무시하고 ```json ... ``` 로
+    감싸서 응답하는 경우가 있다 — 실측 확인됨(라이브 호출 시 매번은 아니지만 재현됨).
+    그대로 두면 json.loads 가 백틱 때문에 파싱 실패 → 불필요하게 폴백 템플릿으로 빠진다.
+    """
+    match = _CODE_FENCE_RE.match(text)
+    return match.group(1).strip() if match else text
+
+
 def _call_llm(evidence: list[dict], prompt: str) -> CoachingText | None:
     """Anthropic API 호출. 실패 시 None 반환."""
     try:
@@ -97,7 +110,7 @@ def _call_llm(evidence: list[dict], prompt: str) -> CoachingText | None:
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw_text = response.content[0].text.strip()
+        raw_text = _strip_code_fence(response.content[0].text.strip())
         parsed = json.loads(raw_text)
         headline = str(parsed.get("headline", ""))
         body = str(parsed.get("body", ""))
