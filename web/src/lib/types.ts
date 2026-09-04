@@ -80,6 +80,22 @@ export interface InterventionReport {
   suggestions: string[];
 }
 
+/** 거래내역 업로드 결과 (POST /api/upload 응답) */
+export interface UploadResult {
+  /** 이후 /api/* 호출에 `?session=` 으로 붙이는 식별자 */
+  sessionId: string;
+  /** 파싱에 성공한 거래 건수 */
+  tradeCount: number;
+  /** 파서가 버린 행 수 (사유는 warnings 로 옴) */
+  skippedCount: number;
+  /** 분석 대상 기간 표기 (예: 2026-01-02 ~ 2026-08-29) */
+  period: string;
+  /** 사용자에게 보여줄 경고 문구. 없으면 빈 배열 */
+  warnings: string[];
+  /** 어떤 형식으로 인식했는지 */
+  source: "kb_export" | "standard_csv";
+}
+
 /** 백테스트 - 개별 차단 사례 */
 export interface BlockedCase {
   date: string;

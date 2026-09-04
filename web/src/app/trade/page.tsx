@@ -3,6 +3,7 @@ import WaterfallChart from "@/components/WaterfallChart";
 import WarningBox from "@/components/WarningBox";
 import InterventionActions from "@/components/InterventionActions";
 import { getInterventionReport } from "@/lib/api";
+import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
 
 const LEVEL_TONE = {
@@ -18,7 +19,8 @@ const LEVEL_LABEL = {
 } as const;
 
 export default async function TradePage() {
-  const report = await getInterventionReport();
+  const session = await getServerSession();
+  const { data: report } = await getInterventionReport(session);
   const { order } = report;
   const tone = LEVEL_TONE[report.riskLevel];
   const amount = order.price * order.quantity;

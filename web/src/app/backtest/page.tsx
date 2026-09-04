@@ -2,6 +2,7 @@ import PageHeader from "@/components/PageHeader";
 import ComparisonBar from "@/components/ComparisonBar";
 import NetResultCard from "@/components/NetResultCard";
 import { getBacktestResult } from "@/lib/api";
+import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
 import type { BiasKey } from "@/lib/types";
 
@@ -12,7 +13,8 @@ const BIAS_LABEL: Record<BiasKey, string> = {
 };
 
 export default async function BacktestPage() {
-  const result = await getBacktestResult();
+  const session = await getServerSession();
+  const { data: result } = await getBacktestResult(session);
 
   return (
     <>

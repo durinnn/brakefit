@@ -111,6 +111,21 @@ class PersonaInfo(CamelModel):
     description: str
 
 
+class UploadSummary(CamelModel):
+    """POST /api/upload 응답 — 업로드한 파일이 어떻게 읽혔는지 요약.
+
+    프론트는 sessionId 를 들고 있다가 진단/개입/백테스트 호출 때 ?session= 로 넘긴다.
+    """
+
+    session_id: str = Field(serialization_alias="sessionId")
+    trade_count: int = Field(serialization_alias="tradeCount")
+    #: 파서가 버린 행 수 (입출금·배당·합계 행 등). 0 이 아니어도 정상이다.
+    skipped_count: int = Field(serialization_alias="skippedCount")
+    period: str
+    warnings: list[str]
+    source: str  # "kb_export" | "standard_csv"
+
+
 class SimulateOrderRequest(BaseModel):
     ticker: str
     name: str

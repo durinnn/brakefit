@@ -5,12 +5,16 @@ DEMO_AS_OF 가 캐시 범위 안이라 네트워크 없이 재현된다.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
 
 client = TestClient(app)
+
+FIXTURE_CSV = Path(__file__).resolve().parents[1] / "fixtures" / "synth" / "chasing_prone.csv"
 
 
 def test_헬스체크():
@@ -106,6 +110,109 @@ def test_백테스트_엔드포인트():
     }
     for case in body["cases"]:
         assert case["biasKey"] in ("averaging_down", "chasing")
+
+
+# ── 업로드 세션 ──────────────────────────────────────────────────────────────
+
+
+def _upload(name: str, content: bytes, content_type: str = "text/csv"):
+    return client.post("/api/upload", files={"file": (name, content, content_type)})
+
+
+@pytest.fixture
+def csv_session() -> str:
+    """표준 거래내역 CSV(fixtures/synth)를 업로드해서 얻은 sessionId."""
+    r = _upload("chasing_prone.csv", FIXTURE_CSV.read_bytes())
+    assert r.status_code == 200, r.text
+    return r.json()["sessionId"]
+
+
+def test_표준_CSV_업로드는_세션을_발급한다():
+    r = _upload("chasing_prone.csv", FIXTURE_CSV.read_bytes())
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert set(body.keys()) == {
+        "sessionId",
+        "tradeCount",
+        "skippedCount",
+        "period",
+        "warnings",
+        "source",
+    }
+    assert body["source"] == "standard_csv"
+    assert body["tradeCount"] > 0
+    assert body["skippedCount"] == 0
+    assert body["sessionId"]
+    assert " ~ " in body["period"]
+
+
+def test_세션으로_세_엔드포인트_전부_돈다(csv_session):
+    d = client.get("/api/diagnose", params={"session": csv_session})
+    assert d.status_code == 200, d.text
+    assert d.json()["totalTrades"] > 0
+
+    b = client.get("/api/backtest", params={"session": csv_session})
+    assert b.status_code == 200, b.text
+
+    s = client.post(
+        "/api/simulate-order",
+        params={"session": csv_session},
+        json={"ticker": "035720", "name": "카카오", "side": "BUY", "quantity": 3, "price": 60000},
+    )
+    assert s.status_code == 200, s.text
+    assert s.json()["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
+
+
+def test_세션은_페르소나와_다른_결과를_준다(csv_session):
+    """session 이 주어지면 persona 는 무시된다 — 기간 라벨이 페르소나와 달라야 한다."""
+    session_body = client.get("/api/diagnose", params={"session": csv_session}).json()
+    persona_body = client.get("/api/diagnose", params={"persona": "mixed_realistic"}).json()
+    assert session_body["periodLabel"] != persona_body["periodLabel"]
+
+
+def test_KB_export_업로드(ledger_xlsx: Path):
+    """conftest 의 KB 거래내역(예수금 원장) fixture 를 그대로 올려본다.
+
+    이 화면에는 종목코드가 없어서 resolve_tickers() 가 붙는다 — 오프라인/장 마감
+    등으로 역매핑이 실패해도 업로드 자체는 성공하고 경고로만 남아야 한다.
+    """
+    r = _upload(
+        "kb_ledger_sample.xlsx",
+        ledger_xlsx.read_bytes(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "kb_export"
+    assert body["tradeCount"] == 5  # LEDGER_ROWS 의 매수 3건 + 매도 2건
+    assert body["skippedCount"] > 0  # 입금·배당·합계 행은 버려진다
+
+
+def test_모르는_세션은_404():
+    assert client.get("/api/diagnose", params={"session": "없는세션"}).status_code == 404
+    assert client.get("/api/backtest", params={"session": "없는세션"}).status_code == 404
+    r = client.post(
+        "/api/simulate-order",
+        params={"session": "없는세션"},
+        json={"ticker": "005930", "name": "삼성전자", "side": "BUY", "quantity": 1, "price": 70000},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("empty.csv", b""),
+        ("whitespace.csv", b"   \n\n"),
+        ("garbage.bin", b"\x00\x01\x02 not a spreadsheet \xff\xfe"),
+        ("wrong_columns.csv", b"a,b,c\n1,2,3\n"),
+    ],
+)
+def test_읽을_수_없는_파일은_400(name, content):
+    r = _upload(name, content)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]  # 사유가 한국어로 들어있어야 한다
 
 
 @pytest.mark.parametrize("persona", ["rational_baseline", "mixed_realistic"])
