@@ -1,6 +1,7 @@
 import PageHeader from "@/components/PageHeader";
 import ComparisonBar from "@/components/ComparisonBar";
 import NetResultCard from "@/components/NetResultCard";
+import SynthDisclaimer from "@/components/SynthDisclaimer";
 import { getBacktestResult } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
@@ -14,7 +15,7 @@ const BIAS_LABEL: Record<BiasKey, string> = {
 
 export default async function BacktestPage() {
   const session = await getServerSession();
-  const { data: result } = await getBacktestResult(session);
+  const { data: result, source } = await getBacktestResult(session);
 
   return (
     <>
@@ -92,6 +93,8 @@ export default async function BacktestPage() {
           보장하지 않습니다.
         </p>
       </section>
+
+      <SynthDisclaimer source={source} />
     </>
   );
 }
