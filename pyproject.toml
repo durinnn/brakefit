@@ -1,0 +1,52 @@
+[project]
+name = "brakefit"
+version = "0.1.0"
+description = "매매 브레이크 — 거래내역으로 투자 행동 편향을 진단하고 주문 직전에 개입한다"
+requires-python = ">=3.11"
+
+dependencies = [
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+    # KB HTS 가 뽑는 .xls 는 SST 가 깨져 있어 xlrd 로 안 열린다. calamine 필수.
+    "python-calamine>=0.2",
+    "openpyxl>=3.1",       # 웹에서 받는 .xlsx
+    "pyarrow>=16.0",       # 일봉 parquet 캐시
+    "pykrx>=1.0.45",       # KRX 일봉
+    "anthropic>=0.34",     # LLM 가드레일 — 소형 고속 모델 호출
+    # pykrx 내부가 pkg_resources 를 쓰는데, (1) setuptools 는 더 이상 파이썬 표준 venv에
+    # 기본 포함이 아니고 (2) 최신 setuptools 는 pkg_resources 자체를 빼버렸다.
+    # 안 넣으면(또는 최신 버전이면) pykrx import 자체가 ModuleNotFoundError 로 죽는다.
+    "setuptools<81",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",   # CSV 업로드
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core"]
