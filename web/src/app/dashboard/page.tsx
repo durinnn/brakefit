@@ -3,6 +3,7 @@ import PageHeader from "@/components/PageHeader";
 import ArcGauge from "@/components/ArcGauge";
 import BiasMetricCard from "@/components/BiasMetricCard";
 import DataSourceBadge from "@/components/DataSourceBadge";
+import SynthDisclaimer from "@/components/SynthDisclaimer";
 import WarningBanner from "@/components/WarningBanner";
 import { getDiagnosisReport } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
@@ -62,6 +63,8 @@ export default async function DashboardPage() {
           이 습관을 막았다면 얼마를 지켰을까? →
         </Link>
       </section>
+
+      <SynthDisclaimer source={source} />
     </>
   );
 }

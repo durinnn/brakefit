@@ -2,6 +2,7 @@ import ArcGauge from "@/components/ArcGauge";
 import WaterfallChart from "@/components/WaterfallChart";
 import WarningBox from "@/components/WarningBox";
 import InterventionActions from "@/components/InterventionActions";
+import SynthDisclaimer from "@/components/SynthDisclaimer";
 import { getInterventionReport } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
@@ -20,7 +21,7 @@ const LEVEL_LABEL = {
 
 export default async function TradePage() {
   const session = await getServerSession();
-  const { data: report } = await getInterventionReport(session);
+  const { data: report, source } = await getInterventionReport(session);
   const { order } = report;
   const tone = LEVEL_TONE[report.riskLevel];
   const amount = order.price * order.quantity;
@@ -82,6 +83,8 @@ export default async function TradePage() {
           riskScore={report.riskScore}
         />
       </section>
+
+      <SynthDisclaimer source={source} />
     </>
   );
 }
