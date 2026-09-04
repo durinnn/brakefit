@@ -44,12 +44,17 @@ def test_진단_엔드포인트는_camelCase_필드로_응답한다():
         "overallGrade",
         "metrics",
         "generatedAt",
+        "headline",
+        "body",
     }
     assert body["overallGrade"] in ("안정", "주의", "위험")
     assert {m["key"] for m in body["metrics"]} == {"disposition", "averaging_down", "chasing"}
     for m in body["metrics"]:
         assert 0.0 <= m["score"] <= 100.0
         assert 0.0 <= m["percentile"] <= 100.0
+    # ANTHROPIC_API_KEY 없는 테스트 환경이므로 core/guard 폴백 템플릿 그대로 나와야 함
+    assert body["headline"]
+    assert body["body"]
 
 
 def test_모르는_페르소나는_404():
@@ -77,6 +82,12 @@ def test_개입_엔드포인트():
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
     assert len(body["contributions"]) == 3
     assert len(body["suggestions"]) >= 1
+    assert set(body["warning"].keys()) == {"headline", "caseCount", "averageReturn", "description"}
+    assert isinstance(body["warning"]["averageReturn"], float)
+    # 사례가 없으면(caseCount=0) 평균도 0 — 그 외엔 core/metrics 의 return_pct 평균이라
+    # 어느 룰이 dominant 인지에 따라 부호가 갈리므로 여기서는 존재 여부만 확인한다
+    if body["warning"]["caseCount"] == 0:
+        assert body["warning"]["averageReturn"] == 0.0
 
 
 def test_백테스트_엔드포인트():

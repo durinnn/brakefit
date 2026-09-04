@@ -60,13 +60,15 @@ def compute(
         jump = (t["price"] - prev_close) / prev_close
         if jump >= SURGE_THRESHOLD:
             chasing_buys += 1
-            detail = f"전일 종가 대비 {jump * 100:.1f}% 급등 후 {int(t['quantity'])}주 매수"
+            return_pct = round(jump * 100, 2)
+            detail = f"전일 종가 대비 {return_pct:.1f}% 급등 후 {int(t['quantity'])}주 매수"
             evidence.append(
                 {
                     "trade_id": t["trade_id"],
                     "date": str(t["traded_at"].date()),
                     "name": t["name"],
                     "detail": detail,
+                    "return_pct": return_pct,  # 매수 시점 급등률(%). "그 이후 실제 수익률"이 아님
                 }
             )
 

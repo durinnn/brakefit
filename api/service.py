@@ -130,6 +130,9 @@ def diagnose(persona_key: str) -> DiagnosisReport:
     weights = {"chasing": 40.0, "averaging_down": 35.0, "disposition_effect": 25.0}
     overall = sum(m.score_0_100 * weights[m.key] for m in metric_results) / sum(weights.values())
 
+    combined_evidence = [item for m in metric_results for item in m.evidence]
+    coaching = generate_coaching(context="report_summary", evidence=combined_evidence)
+
     return DiagnosisReport(
         period_label=_period_label(trades),
         total_trades=len(trades),
@@ -137,6 +140,8 @@ def diagnose(persona_key: str) -> DiagnosisReport:
         overall_grade=_grade(overall),
         metrics=metrics,
         generated_at=datetime.now().isoformat(timespec="seconds"),
+        headline=coaching.headline,
+        body=coaching.body,
     )
 
 
@@ -186,7 +191,9 @@ def simulate_order(persona_key: str, order_req: SimulateOrderRequest) -> Interve
         # case_count 는 그대로 실제 이력 건수를 보여주므로 headline 이 "이력 없음"이라고
         # 모순되게 말하지 않도록 분리해둔다.
         headline = f"{BIAS_KEY_LABEL[dominant.key]} 이력이 있지만 위험 수준은 아님"
-        description = "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
+        description = (
+            "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
+        )
     else:
         headline = "과거 패턴 이력 없음"
         description = "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
@@ -194,7 +201,7 @@ def simulate_order(persona_key: str, order_req: SimulateOrderRequest) -> Interve
     warning = PatternWarning(
         headline=headline,
         case_count=len(dominant_metric.evidence) if dominant_metric else 0,
-        average_return=0.0,  # TODO: 지표 evidence 에 수익률 숫자가 아직 없음 (D/C 협의 필요)
+        average_return=_average_return(dominant_metric),
         description=description,
     )
 
@@ -231,6 +238,19 @@ def simulate_order(persona_key: str, order_req: SimulateOrderRequest) -> Interve
             report.should_intervene, dominant.key if report.should_intervene else None
         ),
     )
+
+
+def _average_return(dominant_metric) -> float:
+    """dominant_metric.evidence 의 return_pct 평균(%).
+
+    return_pct 는 "매수/판정 시점의 평가손익률·급등률" 이지, 그 이후 실제
+    수익률이 아니다(사후 성과 추적은 core/backtest 영역 — 별도 논의 필요).
+    evidence 에 return_pct 가 없는 항목은 평균에서 제외한다.
+    """
+    if dominant_metric is None:
+        return 0.0
+    returns = [e["return_pct"] for e in dominant_metric.evidence if "return_pct" in e]
+    return round(sum(returns) / len(returns), 2) if returns else 0.0
 
 
 def _suggestions(should_intervene: bool, dominant_key: str | None) -> list[str]:

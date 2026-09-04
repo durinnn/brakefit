@@ -121,6 +121,11 @@ class MetricResult:
 `evidence[]` 의 각 항목은 최소한 `trade_id`, `date`, `name`, `detail`(사람이 읽는 한 줄)을 갖는다.
 **LLM 은 이 evidence 안의 숫자만 쓸 수 있다** (가드레일의 숫자 화이트리스트).
 
+지표 3종(2026-09) 모두 `return_pct`(float, %) 를 추가로 담는다 — **판정 시점의 평가손익률·급등률**
+이지 "그 이후 실제 수익률"이 아니다(사후 성과 추적은 core/backtest 영역). 계산 불가한 경우(원가
+역산 실패 등) 키 자체를 생략한다. `api/service.py` 의 `PatternWarning.average_return` 이 이 값들의
+평균이다.
+
 ---
 
 ## 5. 원시 시세 (B 제공)

@@ -49,6 +49,10 @@ class DiagnosisReport(CamelModel):
     overall_grade: str = Field(serialization_alias="overallGrade")  # "안정"|"주의"|"위험"
     metrics: list[BiasMetric]
     generated_at: str = Field(serialization_alias="generatedAt")
+    # core/guard 종합 소견 (context="report_summary"). web/(lovulive) types.ts 에는
+    # 아직 이 두 필드가 없음 — D 와 필드명 맞춘 뒤 프론트 표시 붙일 것.
+    headline: str
+    body: str
 
 
 class RiskContribution(CamelModel):

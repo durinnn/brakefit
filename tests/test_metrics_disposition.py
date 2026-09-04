@@ -122,7 +122,19 @@ TIMELINE = pd.DataFrame(
     ]
 )
 
-TRADES = pd.DataFrame(columns=["trade_id"])  # 이 지표는 아직 trades를 안 쓴다 (TODO 참조)
+TRADES = pd.DataFrame(
+    [
+        # 005930 청산 episode 의 원가 — return_pct 역산에 쓰인다(_closed_episode_return_pct).
+        # 50,000원 실현손익 / 1,000,000원 매수금액 = 5.0%
+        dict(
+            trade_id="005930:1",
+            ticker="005930",
+            side="BUY",
+            traded_at="2026-08-01",
+            amount=1_000_000,
+        ),
+    ]
+)
 
 
 def test_disposition_effect_matches_hand_calculation():
@@ -135,10 +147,14 @@ def test_disposition_effect_matches_hand_calculation():
 
 def test_evidence_picks_fastest_gain_and_longest_loss():
     result = compute(TIMELINE, TRADES, EPISODES)
-    trade_ids = [e["trade_id"] for e in result.evidence]
+    by_id = {e["trade_id"]: e for e in result.evidence}
 
-    assert "005930:2026-08-01" in trade_ids  # 가장 빨리 판 이익 (4일)
-    assert "373220:2026-07-10" in trade_ids  # 가장 오래 버틴 손실 (47일)
+    assert "005930:2026-08-01" in by_id  # 가장 빨리 판 이익 (4일)
+    assert "373220:2026-07-10" in by_id  # 가장 오래 버틴 손실 (47일)
+    # 청산 건 — TRADES 의 BUY 금액으로 역산한 실현수익률
+    assert by_id["005930:2026-08-01"]["return_pct"] == pytest.approx(5.0)
+    # 미청산 건 — timeline.unrealized_pct 를 그대로 씀
+    assert by_id["373220:2026-07-10"]["return_pct"] == pytest.approx(-2.0)
 
 
 def test_empty_episodes_returns_neutral_score():
