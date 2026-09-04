@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from api import service
 from api.main import app
+from core.synth.personas import PRESETS
 
 client = TestClient(app)
 
@@ -213,6 +215,50 @@ def test_읽을_수_없는_파일은_400(name, content):
     r = _upload(name, content)
     assert r.status_code == 400, r.text
     assert r.json()["detail"]  # 사유가 한국어로 들어있어야 한다
+
+
+def test_5MB_초과_업로드는_413():
+    """무료 인스턴스(512MB) 보호 — 상한을 1바이트만 넘겨도 거절되어야 한다."""
+    r = _upload("huge.csv", b"x" * (service.MAX_UPLOAD_BYTES + 1))
+    assert r.status_code == 413, r.text
+    assert "5MB" in r.json()["detail"]
+
+    # 경계값: 정확히 상한이면 크기 검사는 통과하고, 내용이 거래내역이 아니라서 400 이 된다
+    r = _upload("boundary.csv", b"x" * service.MAX_UPLOAD_BYTES)
+    assert r.status_code == 400, r.text
+
+
+def test_세션은_상한을_넘으면_오래된_것부터_밀린다():
+    """세션 LRU — 상한+1 개를 올리면 가장 오래된 하나만 사라져야 한다."""
+    tiny_csv = (
+        "traded_at,ticker,name,side,quantity,price\n2026-08-10,005930,삼성전자,BUY,1,70000\n"
+    ).encode()
+    session_ids = []
+    for _ in range(service.MAX_SESSIONS + 1):
+        r = _upload("tiny.csv", tiny_csv)
+        assert r.status_code == 200, r.text
+        session_ids.append(r.json()["sessionId"])
+
+    # 제일 먼저 올린 세션만 밀려나고(404), 최근 MAX_SESSIONS 개는 살아있어야 한다
+    assert client.get("/api/diagnose", params={"session": session_ids[0]}).status_code == 404
+    assert not service.has_session(session_ids[0])
+    for sid in session_ids[1:]:
+        assert service.has_session(sid), sid
+    assert len(service._SESSIONS) == service.MAX_SESSIONS
+
+
+def test_lifespan_이_기준선_캐시를_미리_채운다():
+    """콜드스타트 후 첫 진단이 페르소나 5종 계산을 뒤집어쓰지 않도록 기동 시 워밍."""
+    service._reference_cache = None
+    try:
+        with TestClient(app):  # with 로 열어야 lifespan 이 실행된다
+            cache = service._reference_cache
+            assert cache is not None
+            assert set(cache) == {"disposition_effect", "averaging_down", "chasing"}
+            assert all(len(v) == len(PRESETS) for v in cache.values())
+    finally:
+        # 다른 테스트가 쓰는 전역이라 원상복구까지가 이 테스트의 책임
+        service._reference_cache = None
 
 
 @pytest.mark.parametrize("persona", ["rational_baseline", "mixed_realistic"])

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections import OrderedDict
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -84,7 +85,21 @@ def _period_label(trades: pd.DataFrame) -> str:
 # DB 를 안 붙이는 건 의도된 축소다(AGENTS.md — 범위를 늘리는 제안보다 줄이는 제안).
 # 그래서 서버가 재시작되면(Render 무료 플랜은 유휴 시 슬립 → 콜드스타트) 세션이 전부
 # 사라지고 이후 요청은 404 가 된다. 프론트는 404 를 받으면 "다시 업로드" 로 안내할 것.
-_SESSIONS: dict[str, pd.DataFrame] = {}
+#
+# OrderedDict 인 이유: 배포처인 Render 무료 인스턴스는 메모리 512MB 뿐인데 세션은
+# DataFrame 을 통째로 들고 있어서, 아무도 안 지우면 업로드가 쌓이는 만큼 그대로
+# 늘어나 OOM 으로 프로세스가 죽는다(= 살아있던 다른 세션까지 전멸). 그래서 LRU 로
+# MAX_SESSIONS 개만 유지한다 — 밀려난 세션은 재업로드하면 되는 404 로 끝나지만,
+# OOM 은 서비스 전체가 내려간다.
+_SESSIONS: OrderedDict[str, pd.DataFrame] = OrderedDict()
+
+#: 동시에 들고 있을 업로드 세션 수 상한. 데모 동시 사용자 규모(수 명)의 여유분이다.
+MAX_SESSIONS = 50
+
+#: 업로드 파일 크기 상한(5MB). 증권사 export 는 수년치라도 수백KB 수준이라 넉넉하고,
+#: 이걸 안 막으면 큰 파일 하나가 read() 한 방에 메모리에 통째로 올라가 위와 같은
+#: 이유로 무료 인스턴스를 넘어뜨린다.
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 #: 업로드 파일을 KB export 로 읽어볼 때 시도하는 매핑 순서. 어느 화면인지는 파일만
 #: 봐서는 모르므로 위에서부터 시도해서 **거래 행이 나오는 첫 매핑**을 채택한다.
@@ -123,7 +138,20 @@ class PriceUnavailable(RuntimeError):
 
 
 def has_session(session_id: str) -> bool:
-    return session_id in _SESSIONS
+    """존재 확인도 '사용'으로 친다 — 진단 직전 검사에서 LRU 순서를 갱신해야
+    바로 뒤따라 오는 _resolve_trades() 가 밀려난 세션을 만나지 않는다."""
+    if session_id not in _SESSIONS:
+        return False
+    _SESSIONS.move_to_end(session_id)
+    return True
+
+
+def _store_session(session_id: str, trades: pd.DataFrame) -> None:
+    """세션 저장 + 상한 초과분(가장 오래 안 쓴 것부터) 정리."""
+    _SESSIONS[session_id] = trades
+    _SESSIONS.move_to_end(session_id)
+    while len(_SESSIONS) > MAX_SESSIONS:
+        _SESSIONS.popitem(last=False)
 
 
 def _safe_filename(filename: str) -> str:
@@ -276,7 +304,7 @@ def ingest_upload(filename: str, content: bytes) -> UploadSummary:
         )
 
     session_id = uuid4().hex
-    _SESSIONS[session_id] = trades
+    _store_session(session_id, trades)
     return UploadSummary(
         session_id=session_id,
         trade_count=len(trades),
@@ -313,6 +341,7 @@ def _resolve_trades(
             f"모르는 세션: {session_id} — 서버가 재시작되면 업로드 세션이 사라집니다. "
             "거래내역을 다시 업로드해주세요."
         )
+    _SESSIONS.move_to_end(session_id)  # 방금 쓴 세션이 LRU 에서 제일 늦게 밀리도록
     return trades, _session_as_of(trades), _session_universe(trades)
 
 
@@ -562,6 +591,8 @@ def backtest(persona_key: str, *, session_id: str | None = None) -> BacktestResu
 
 
 __all__ = [
+    "MAX_SESSIONS",
+    "MAX_UPLOAD_BYTES",
     "NOT_REAL_USER_DISCLAIMER",
     "PriceUnavailable",
     "SessionNotFound",
