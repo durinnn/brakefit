@@ -11,10 +11,13 @@ core/engine(A) 이 아직 없어서, trades/timeline 을 손으로 만든 fixtur
                 07-02 추가매수 @43,000 (전일종가 40,000 대비 +7.5% → 추격 O)
 
 기대값 손계산:
-    전체 매수 건수 = 5건 (진입 2건 + 추가매수 3건)
+    판정 가능한 매수 건수(=전일 종가 있는 추가매수) = 3건 (한미반도체 08-02·08-03, 카카오 07-02)
+    신규 진입(한미반도체 08-01, 카카오 07-01)은 전일 종가가 없어 분모에서 제외한다
+    (분모를 전체 매수로 잡으면 판정 불가 건이 섞여 비율이 왜곡된다 — 대조군 페르소나의
+    chasing 점수가 거래 횟수에 따라 크게 흔들리던 원인이었음).
     추격매수로 판정된 건 = 2건 (한미반도체 08-02, 카카오 07-02)
-    raw = 2 / 5 = 0.4
-    score_0_100 = 40.0
+    raw = 2 / 3 = 0.6667
+    score_0_100 = 66.67
 """
 
 from __future__ import annotations
@@ -153,8 +156,8 @@ def test_chasing_matches_hand_calculation():
     result = compute(TIMELINE, TRADES, EPISODES)
 
     assert result.key == "chasing"
-    assert result.raw == pytest.approx(0.4, abs=1e-6)
-    assert result.score_0_100 == pytest.approx(40.0, abs=1e-6)
+    assert result.raw == pytest.approx(2 / 3, abs=1e-6)
+    assert result.score_0_100 == pytest.approx(66.6667, abs=1e-3)
 
 
 def test_evidence_excludes_entry_and_small_moves():
