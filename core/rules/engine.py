@@ -38,8 +38,20 @@ def evaluate(
     contributions = [chase_result, avg_result, disp_result]
     risk_score = clamp(sum(c.score for c in contributions))
 
+    # 개입 조건 = "룰 하나라도 발동". 점수 임계는 OR 로 남겨둔다.
+    #
+    # 왜: (1) core/backtest 는 룰별 c.triggered 로 개입 주문을 세는데(backtest.py),
+    #     팝업만 risk_score >= 50 을 쓰면 "백테스트가 센 주문"과 "팝업이 뜨는 주문"이
+    #     서로 다른 집합이 된다 — 증명 화면과 개입 화면이 다른 얘기를 하게 됨.
+    #     (2) 기여식이 MAX_CONTRIBUTION(40/35/25) × 과거지표점수/100 이라 50 을 넘으려면
+    #     룰 두 개가 동시에 강해야 하는데, 합성 페르소나는 한 축만 강하게 생성돼서
+    #     데모에서 팝업이 한 번도 안 떴다. 처분효과는 상한이 25 라 단독으로는 구조적으로
+    #     50 도달 불가(SELL 주문은 영원히 개입 없음).
+    # risk_level(LOW/MEDIUM/HIGH)은 여전히 점수 기반이라 강도 표현은 그대로 유지된다.
+    should_intervene = any(c.triggered for c in contributions) or risk_score >= INTERVENE_THRESHOLD
+
     return InterventionReport(
         risk_score=round(risk_score, 2),
         contributions=contributions,
-        should_intervene=risk_score >= INTERVENE_THRESHOLD,
+        should_intervene=should_intervene,
     )

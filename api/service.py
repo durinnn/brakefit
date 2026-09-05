@@ -574,28 +574,26 @@ def simulate_order(
         for c in report.contributions
     ]
 
-    dominant = max(report.contributions, key=lambda c: c.score)
+    # 지배 편향은 "발동한 룰 중 기여 최대" — 개입 조건이 triggered 기준이라(core/rules/engine.py)
+    # 과거 점수만 높고 이번 주문에선 발동하지 않은 룰이 팝업 문구를 가져가면 안 된다.
+    # 아무 룰도 발동 안 한 경우에만 기존대로 전체 중 최대를 쓴다(전부 0점이면 워터폴 첫 룰).
+    triggered = [c for c in report.contributions if c.triggered]
+    dominant = max(triggered or report.contributions, key=lambda c: c.score)
     dominant_metric = next((m for m in metric_results if m.key == dominant.key), None)
 
     if report.should_intervene and dominant.evidence:
         # 워터폴 순서(chasing → averaging_down → disposition)를 그대로 우선순위로 넘긴다 —
         # guard.get_order_fallback() 이 triggered_keys[0] 을 최우선 룰로 취급한다.
-        triggered_keys = [c.key for c in report.contributions if c.triggered]
+        triggered_keys = [c.key for c in triggered]
         coaching = generate_coaching(
             context="order_intervention",
             evidence=dominant.evidence,
             triggered_keys=triggered_keys,
         )
         headline, description = coaching.headline, coaching.body
-    elif dominant.triggered:
-        # 개별 룰은 트리거됐지만 합산 위험점수가 개입 기준(INTERVENE_THRESHOLD) 미만 —
-        # case_count 는 그대로 실제 이력 건수를 보여주므로 headline 이 "이력 없음"이라고
-        # 모순되게 말하지 않도록 분리해둔다.
-        headline = f"{BIAS_KEY_LABEL[dominant.key]} 이력이 있지만 위험 수준은 아님"
-        description = (
-            "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
-        )
     else:
+        # 발동한 룰이 하나라도 있으면 should_intervene 이 True 이므로 여기는 "아무것도
+        # 발동 안 함" 뿐이다 — 예전의 "발동은 했는데 점수가 임계 미만" 상태는 사라졌다.
         headline = "과거 패턴 이력 없음"
         description = "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
 
