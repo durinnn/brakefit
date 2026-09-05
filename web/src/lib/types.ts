@@ -14,7 +14,8 @@ export interface BiasMetric {
   name: string;
   /** 0~100 점수. 높을수록 편향이 강함 */
   score: number;
-  /** 상위 백분위 (예: 12 → 상위 12%) */
+  /** 기준선 표본 중 이 점수 이하인 비율 (예: 95 → 표본의 95%보다 편향이 강함 = 상위 5%).
+   *  화면에서는 100 − p 로 뒤집어 "상위 N%" 로 표기 */
   percentile: number;
   /** 한 줄 해석 문구 */
   summary: string;
