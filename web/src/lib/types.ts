@@ -66,7 +66,12 @@ export interface PatternWarning {
   headline: string;
   /** 유사 사례 건수 */
   caseCount: number;
-  /** 해당 사례들의 평균 수익률 (%) */
+  /**
+   * 해당 사례들의 evidence.return_pct 평균 (%). **주문 이후의 실제 수익률이 아니다.**
+   * 지배 편향에 따라 의미가 다르다 — 추격매수: 매수 시점 급등률 / 물타기: 매수
+   * 시점 평가손익률 / 처분효과: 근거 episode 의 손익률(실현 또는 현재 미실현).
+   * 화면 레이블은 WarningBox 가 지배 편향별로 바꿔 단다.
+   */
   averageReturn: number;
   description: string;
 }
