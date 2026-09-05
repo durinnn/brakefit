@@ -1,182 +1,142 @@
 """추격매수 브레이크 룰 테스트.
 
 시나리오 (as_of = 2026-08-04 화):
-    삼성전자(005930): 08-04 까지 **보유 중**(에피소드 열려 있음), 마지막 종가 66,000원
-      → 매수가 69,300원 = +5.0% → 발동
-      → 매수가 67,980원 = +3.0% → 미발동
-    SK하이닉스(000660): 05-04 진입 → 07-31 청산. timeline 마지막 행은 07-31(금)이라
-      as_of 로부터 2영업일 전 = MAX_STALE_BUSINESS_DAYS(1) 초과 → "직전 종가 없음"
-      으로 미판정. 옛 종가와 비교하면 +25% 짜리 가짜 급등이 잡히는 자리다.
-    NAVER(035420): 08-03(월) 청산 = as_of 직전 영업일이라 그 종가는 아직 유효 →
-      청산 다음 날 재진입은 정상 판정한다.
+    가짜 시세 (삼성전자 005930)
+        08-03(월) 80,000원   ← as_of 전날. 여기를 기준으로 삼으면 판정이 뒤집힌다
+        08-04(화) 66,000원   ← as_of 당일 = 기준 종가 (판정 시점은 as_of 보다 뒤라
+                               이 종가는 이미 공시된 값 — core/rules/base 참조)
+        08-05(수) 90,000원   ← 미래. 요청조차 하면 안 된다
 
-기대값:
-    BUY 69,300원 + 과거 추격매수 score=95 → 발동, contribution = 40 × 0.95 = 38.0
+기대값 (손계산):
+    BUY 69,300원 = 66,000 × 1.05 = +5.0% → 발동
+        contribution = MAX_CONTRIBUTION(40) × (95/100) = 38.0
+    BUY 67,980원 = 66,000 × 1.03 = +3.0% → 미발동
+    BUY 69,300원인데 08-03 종가(80,000)를 기준으로 삼았다면 -13.4% 라 미발동 —
+        기준 종가를 하루라도 어긋나게 잡으면 이 테스트가 반대로 뒤집힌다.
+
+보유 여부는 판정 조건이 아니다: timeline/episodes 를 아예 안 받는다.
 """
 
 from __future__ import annotations
 
 from datetime import date
 
-import pandas as pd
 import pytest
+from fake_prices import ExplodingPriceSource, FakePriceSource
 
 from core.rules.base import ProposedOrder
 from core.rules.chasing_rule import MAX_CONTRIBUTION, SURGE_THRESHOLD, evaluate
 
 AS_OF = date(2026, 8, 4)
+REF_CLOSE = 66_000  # as_of 당일(08-04) 종가 = 기준 종가
+SURGE_PRICE = REF_CLOSE * (1 + SURGE_THRESHOLD)  # 69,300원 (+5.0%)
+BELOW_PRICE = REF_CLOSE * 1.03  # 67,980원 (+3.0%)
 
 
-def _timeline_row(date_: str, ticker: str, name: str, close: float, episode_id: str) -> dict:
-    return dict(
-        date=date_,
-        ticker=ticker,
-        name=name,
-        quantity=10,
-        avg_cost=70_000,
-        close=close,
-        unrealized_pnl=-40_000,
-        unrealized_pct=-0.057,
-        realized_pnl=0,
-        holding_days=3,
-        episode_id=episode_id,
+def _prices(**kwargs) -> FakePriceSource:
+    return FakePriceSource(
+        {
+            "005930": {
+                "2026-07-31": 64_000,
+                "2026-08-03": 80_000,  # as_of 전날 — 이걸 기준 삼으면 미발동으로 뒤집힌다
+                "2026-08-04": REF_CLOSE,
+                "2026-08-05": 90_000,  # 미래 — 쓰면 안 됨
+            }
+        },
+        **kwargs,
     )
 
 
-TIMELINE = pd.DataFrame(
-    [
-        _timeline_row("2026-08-03", "005930", "삼성전자", 65_000, "005930:2026-08-01"),
-        _timeline_row("2026-08-04", "005930", "삼성전자", 66_000, "005930:2026-08-01"),
-        # 청산된 지 오래된 에피소드 — 마지막 종가가 as_of 기준 stale
-        _timeline_row("2026-07-31", "000660", "SK하이닉스", 200_000, "000660:2026-05-04"),
-        # as_of 직전 영업일에 청산 — 종가는 아직 "직전 종가" 로 유효
-        _timeline_row("2026-08-03", "035420", "NAVER", 150_000, "035420:2026-07-20"),
-    ]
-)
-
-EPISODES = pd.DataFrame(
-    [
-        dict(
-            episode_id="005930:2026-08-01",
-            ticker="005930",
-            name="삼성전자",
-            opened_at=date(2026, 8, 1),
-            closed_at=None,
-            is_open=True,
-        ),
-        dict(
-            episode_id="000660:2026-05-04",
-            ticker="000660",
-            name="SK하이닉스",
-            opened_at=date(2026, 5, 4),
-            closed_at=date(2026, 7, 31),
-            is_open=False,
-        ),
-        dict(
-            episode_id="035420:2026-07-20",
-            ticker="035420",
-            name="NAVER",
-            opened_at=date(2026, 7, 20),
-            closed_at=date(2026, 8, 3),
-            is_open=False,
-        ),
-    ]
-)
-
-PREV_CLOSE = 66_000
-SURGE_PRICE = int(PREV_CLOSE * (1 + SURGE_THRESHOLD))  # 69,300원 (+5.0%)
-BELOW_PRICE = int(PREV_CLOSE * 1.03)  # 67,980원 (+3.0%)
+def _order(price: float, side: str = "BUY", ticker: str = "005930") -> ProposedOrder:
+    return ProposedOrder(ticker=ticker, name="삼성전자", side=side, quantity=5, price=price)
 
 
-def test_buy_after_surge_triggers_with_correct_contribution():
-    order = ProposedOrder(
-        ticker="005930", name="삼성전자", side="BUY", quantity=5, price=SURGE_PRICE
-    )
-    result = evaluate(order, 95.0, TIMELINE, EPISODES, AS_OF)
+def test_신규진입_급등매수는_보유중이_아니어도_발동한다():
+    """미보유 종목 매수 — timeline 이 없어도 시세 캐시로 판정한다(PR 26 의 미판정 회귀)."""
+    result = evaluate(_order(SURGE_PRICE), 95.0, AS_OF, _prices())
 
     assert result.triggered is True
     assert result.score == pytest.approx(MAX_CONTRIBUTION * 0.95, abs=1e-6)
-    assert result.evidence != []
-    jump_pct = (SURGE_PRICE - PREV_CLOSE) / PREV_CLOSE * 100
-    assert f"{jump_pct:.1f}%" in result.evidence[0]["detail"]
-    # 열린 에피소드의 **마지막** 행(08-04)을 썼는지 — 08-03(65,000원)을 쓰면 급등률이 달라진다
+    assert result.warnings == []
+    # 기준 종가는 as_of 당일(08-04) — 전날(08-03) 이었다면 미발동이었을 주문이다
     assert result.evidence[0]["date"] == "2026-08-04"
+    assert "5.0%" in result.evidence[0]["detail"]
 
 
-def test_buy_below_surge_threshold_does_not_trigger():
-    order = ProposedOrder(
-        ticker="005930", name="삼성전자", side="BUY", quantity=5, price=BELOW_PRICE
-    )
-    result = evaluate(order, 95.0, TIMELINE, EPISODES, AS_OF)
+def test_급등이_아니면_미발동():
+    result = evaluate(_order(BELOW_PRICE), 95.0, AS_OF, _prices())
+
+    assert result.triggered is False
+    assert result.score == 0.0
+    assert result.warnings == []  # 판정은 했다 — 사유가 붙으면 안 된다
+
+
+def test_정확히_임계값이면_발동():
+    assert evaluate(_order(SURGE_PRICE), 100.0, AS_OF, _prices()).triggered is True
+
+
+def test_매도주문은_미발동():
+    result = evaluate(_order(SURGE_PRICE, side="SELL"), 100.0, AS_OF, _prices())
 
     assert result.triggered is False
     assert result.score == 0.0
 
 
-def test_sell_order_does_not_trigger():
-    order = ProposedOrder(
-        ticker="005930", name="삼성전자", side="SELL", quantity=5, price=SURGE_PRICE
-    )
-    result = evaluate(order, 100.0, TIMELINE, EPISODES, AS_OF)
-
-    assert result.triggered is False
-    assert result.score == 0.0
+# ── 룩어헤드 회귀 ────────────────────────────────────────────────────────────
 
 
-def test_new_ticker_without_timeline_does_not_trigger():
-    order = ProposedOrder(ticker="042700", name="한미반도체", side="BUY", quantity=5, price=250_000)
-    result = evaluate(order, 100.0, TIMELINE, EPISODES, AS_OF)
+def test_as_of_다음날부터의_종가는_요청조차_하지_않는다():
+    """기준 종가 조회 구간의 끝이 as_of 이하여야 한다.
 
-    assert result.triggered is False
-    assert result.score == 0.0
+    fake 가 as_of 초과 날짜를 요청받으면 그 자리에서 AssertionError 로 터진다.
+    """
+    prices = _prices(forbid_after=AS_OF)
+    evaluate(_order(SURGE_PRICE), 95.0, AS_OF, prices)
+
+    ticker, start, end = prices.calls[0]
+    assert ticker == "005930"
+    assert end == AS_OF  # 당일까지는 봐야 한다 — 하루 당기면 지표 T−1 기준과 어긋난다
+    assert start < end  # lookback 구간이 실제로 뒤로 열려 있어야 한다
 
 
-def test_exact_threshold_triggers():
-    # +5.0% 정확히 = SURGE_THRESHOLD 이상이므로 발동
-    exact_price = PREV_CLOSE * (1 + SURGE_THRESHOLD)
-    order = ProposedOrder(
-        ticker="005930", name="삼성전자", side="BUY", quantity=1, price=exact_price
-    )
-    result = evaluate(order, 100.0, TIMELINE, EPISODES, AS_OF)
-
+def test_as_of_전날_종가로_판정하면_뒤집히는_주문():
+    """08-03 종가(80,000)를 기준으로 삼으면 -13% 라 미발동 — 그 구현은 이 테스트가 잡는다."""
+    result = evaluate(_order(SURGE_PRICE), 95.0, AS_OF, _prices())
     assert result.triggered is True
 
 
-# ── stale timeline 회귀 ──────────────────────────────────────────────────────
+# ── 미판정 + 사유 ────────────────────────────────────────────────────────────
 
 
-def test_closed_old_episode_does_not_trigger():
-    """몇 달 전 청산된 에피소드의 마지막 종가를 "전일 종가"로 쓰지 않는다."""
-    order = ProposedOrder(ticker="000660", name="SK하이닉스", side="BUY", quantity=5, price=250_000)
-    result = evaluate(order, 100.0, TIMELINE, EPISODES, AS_OF)
+def test_시세조회_실패는_미판정이고_사유를_남긴다():
+    result = evaluate(_order(SURGE_PRICE), 100.0, AS_OF, ExplodingPriceSource())
 
-    assert result.triggered is False  # 200,000 → 250,000 은 +25% 지만 비교 자체가 무효
+    assert result.triggered is False
     assert result.score == 0.0
+    assert len(result.warnings) == 1
+    assert "005930" in result.warnings[0]
+    assert "ConnectionError" in result.warnings[0]
 
 
-def test_re_entry_next_business_day_still_judged():
-    """직전 영업일에 청산한 종목의 종가는 아직 유효하다 — 재진입 추격은 잡는다."""
-    order = ProposedOrder(ticker="035420", name="NAVER", side="BUY", quantity=5, price=165_000)
-    result = evaluate(order, 100.0, TIMELINE, EPISODES, AS_OF)
+def test_시세가_없는_종목도_미판정이고_사유를_남긴다():
+    result = evaluate(_order(250_000, ticker="042700"), 100.0, AS_OF, _prices())
 
-    assert result.triggered is True  # 150,000 → 165,000 = +10%
-    assert result.score == pytest.approx(MAX_CONTRIBUTION, abs=1e-6)
+    assert result.triggered is False
+    assert result.warnings and "042700" in result.warnings[0]
 
 
-def test_without_as_of_only_open_episodes_are_judged():
-    """as_of 를 모르면 종가가 얼마나 묵었는지 알 수 없다 — 보유 중일 때만 판정."""
-    closed = ProposedOrder(ticker="035420", name="NAVER", side="BUY", quantity=5, price=165_000)
-    assert evaluate(closed, 100.0, TIMELINE, EPISODES).triggered is False
+def test_lookback_안에_종가가_없으면_미판정():
+    """상장폐지·장기 거래정지 등으로 최근 종가가 통째로 빈 경우."""
+    stale = FakePriceSource({"005930": {"2026-01-05": 50_000}})  # 7개월 전 종가뿐
+    result = evaluate(_order(SURGE_PRICE), 100.0, AS_OF, stale)
 
-    held = ProposedOrder(
-        ticker="005930", name="삼성전자", side="BUY", quantity=5, price=SURGE_PRICE
-    )
-    assert evaluate(held, 100.0, TIMELINE, EPISODES).triggered is True
+    assert result.triggered is False
+    assert result.warnings and "종가가 없음" in result.warnings[0]
 
 
-def test_empty_episodes_falls_back_to_no_judgement():
-    """episodes 가 비면 '보유 중'인지 알 수 없다 — as_of 기준 신선도만으로 판단한다."""
-    empty = pd.DataFrame(columns=["episode_id", "ticker", "closed_at", "is_open"])
-    order = ProposedOrder(ticker="000660", name="SK하이닉스", side="BUY", quantity=5, price=250_000)
+def test_as_of_없이는_판정하지_않는다():
+    """기준일을 모르면 어떤 날 종가를 써야 하는지도 모른다 — 미판정 + 사유."""
+    result = evaluate(_order(SURGE_PRICE), 100.0, None, _prices())
 
-    assert evaluate(order, 100.0, TIMELINE, empty, AS_OF).triggered is False
+    assert result.triggered is False
+    assert result.warnings and "as_of" in result.warnings[0]

@@ -44,9 +44,8 @@ export default function InterventionActions({
     return (
       <div className="rounded-2xl border border-safe/40 bg-safe-dim/50 p-5 text-center">
         <p className="text-base font-bold text-safe-soft">주문을 멈췄습니다</p>
-        <p className="mt-2 text-sm text-ink-300">
-          24시간 뒤 같은 종목을 다시 검토할지 알려드릴게요.
-        </p>
+        {/* 재알림 스케줄러가 없으므로 "24시간 뒤 알려드릴게요" 같은 약속은 하지 않는다. */}
+        <p className="mt-2 text-sm text-ink-300">내일 다시 판단해 보세요.</p>
         <button
           type="button"
           onClick={() => setDecision("none")}
@@ -62,9 +61,10 @@ export default function InterventionActions({
     return (
       <div className="rounded-2xl border border-ink-600 bg-ink-800 p-5 text-center">
         <p className="text-base font-bold text-ink-100">주문이 접수되었습니다</p>
+        {/* 결정은 이 컴포넌트의 로컬 state 일 뿐 서버에 남지 않는다 —
+            "다음 진단에 반영" 같은 미구현 기능을 문구로 약속하지 않는다. */}
         <p className="mt-2 text-sm text-ink-400">
-          이 거래는 &lsquo;경고 후 강행&rsquo;으로 기록되어 다음 진단에
-          반영됩니다.
+          경고를 확인하고 진행한 것으로 이번 세션에 기록됩니다.
         </p>
         <button
           type="button"
@@ -99,7 +99,7 @@ export default function InterventionActions({
         onClick={() => decide("stopped")}
         className="w-full rounded-xl bg-ink-100 py-4 text-base font-bold text-ink-950 transition-opacity hover:opacity-90"
       >
-        멈추기 · 24시간 뒤 다시 보기
+        멈추기
       </button>
 
       {confirming ? (

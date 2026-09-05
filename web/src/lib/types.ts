@@ -66,7 +66,12 @@ export interface PatternWarning {
   headline: string;
   /** 유사 사례 건수 */
   caseCount: number;
-  /** 해당 사례들의 평균 수익률 (%) */
+  /**
+   * 해당 사례들의 evidence.return_pct 평균 (%). **주문 이후의 실제 수익률이 아니다.**
+   * 지배 편향에 따라 의미가 다르다 — 추격매수: 매수 시점 급등률 / 물타기: 매수
+   * 시점 평가손익률 / 처분효과: 근거 episode 의 손익률(실현 또는 현재 미실현).
+   * 화면 레이블은 WarningBox 가 지배 편향별로 바꿔 단다.
+   */
   averageReturn: number;
   description: string;
 }
@@ -86,6 +91,13 @@ export interface InterventionReport {
   baseScore: number;
   contributions: RiskContribution[];
   warning: PatternWarning;
+  /**
+   * 이번 판정을 주도한 편향. 개입이 아니면 null.
+   * 지배 편향 규칙("발동한 룰 중 기여 최대")은 서버(core/rules)에만 있어야 한다 —
+   * contributions 의 value 최댓값이나 label 문자열로 되짚으면 규칙·라벨이 바뀔 때
+   * 프론트만 조용히 틀린다. 구버전 백엔드 응답에는 없을 수 있어 optional 이다.
+   */
+  dominantKey?: BiasKey | null;
   /** 시스템이 제안하는 대안 행동 */
   suggestions: string[];
 }

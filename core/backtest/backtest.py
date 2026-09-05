@@ -40,7 +40,7 @@ import pandas as pd
 from core.engine.engine import build
 from core.metrics import averaging_down, chasing, disposition
 from core.rules import engine as rules_engine
-from core.rules.base import ProposedOrder
+from core.rules.base import PriceSource, ProposedOrder
 
 # 이 두 룰만 v1 백테스트 대상 — 클래스 docstring 참조.
 BACKTESTABLE_KEYS = ("averaging_down", "chasing")
@@ -85,8 +85,16 @@ class BacktestResult:
         return "\n".join(lines)
 
 
-def run(trades: pd.DataFrame, as_of: date | None = None) -> BacktestResult:
-    """trades(§1) 전체를 받아 브레이크 백테스트를 돌린다."""
+def run(
+    trades: pd.DataFrame,
+    as_of: date | None = None,
+    price_source: PriceSource | None = None,
+) -> BacktestResult:
+    """trades(§1) 전체를 받아 브레이크 백테스트를 돌린다.
+
+    price_source 는 룰이 기준 종가를 읽는 조회기 — 기본값(시세 캐시)이면 그대로 두고,
+    테스트에서 "룰이 어떤 날짜를 요청했는지"를 감시할 때만 fake 를 주입한다.
+    """
     from core.schema import validate
 
     problems = validate(trades)
@@ -132,10 +140,17 @@ def run(trades: pd.DataFrame, as_of: date | None = None) -> BacktestResult:
             quantity=int(t["quantity"]),
             price=float(t["price"]),
         )
-        # as_of 는 판정 시점(cutoff) 그대로 — 룰이 "그 시점에 보유 중이었나 / 마지막
-        # 종가가 그 시점 기준으로 최신인가"를 이걸로 판단한다. 미래는 여전히 안 넘어간다.
+        # as_of 는 판정 시점(cutoff = 매수 하루 전) 그대로. 룰은 이걸로 (1) 그 시점에
+        # 보유 중이었는지, (2) 기준 종가를 어디까지 볼지를 정한다.
+        #
+        # ⚠ 시세 조회도 이 컷을 그대로 따른다: 룰이 쓰는 기준 종가는 as_of **이하**
+        # 마지막 영업일 종가라(core/rules/base.reference_close), 여기서는 cutoff
+        # 당일 = 매수 전날까지만 본다. 매수 전날 종가는 매수 시점에 이미 나와 있는
+        # 값이라 룩어헤드가 아니고(장 마감 후 공시), 이 컷이 core/metrics/chasing 의
+        # T−1 기준과도 같은 날을 가리킨다. 매수일 당일 종가는 여전히 조회 구간
+        # 밖이다 — 그쪽이 룩어헤드다(AGENTS.md 절대규칙 1).
         report = rules_engine.evaluate(
-            order, metric_results, prior_timeline, prior_episodes, cutoff
+            order, metric_results, prior_timeline, prior_episodes, cutoff, price_source
         )
 
         backtestable = [

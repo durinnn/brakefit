@@ -19,6 +19,7 @@ import type { InterventionDecision } from "@/components/InterventionActions";
 import WaterfallChart from "@/components/WaterfallChart";
 import WarningBox from "@/components/WarningBox";
 import { DEMO_ORDER, simulateOrder, type DataSource } from "@/lib/api";
+import { BIAS_LABEL, dominantBias } from "@/lib/bias";
 import { formatWon } from "@/lib/format";
 import { clearClientSession, readClientSession } from "@/lib/session";
 import type { InterventionReport, OrderInput, UniverseItem } from "@/lib/types";
@@ -306,10 +307,12 @@ export default function OrderForm({
                 ? "주문을 멈췄습니다"
                 : "경고를 무시하고 주문이 접수되었습니다"}
             </p>
+            {/* 결정은 이 화면의 로컬 state 뿐이다 — 재알림·이력 저장은 미구현이므로
+                InterventionActions 와 같은 문구로 맞춘다. */}
             <p className="mt-2 text-sm leading-relaxed text-ink-300">
               {decision === "stopped"
-                ? "24시간 뒤 같은 종목을 다시 검토할지 알려드릴게요."
-                : "이 거래는 ‘경고 후 강행’으로 기록되어 다음 진단에 반영됩니다."}
+                ? "내일 다시 판단해 보세요."
+                : "경고를 확인하고 진행한 것으로 이번 세션에 기록됩니다."}
             </p>
           </div>
         ) : null}
@@ -363,6 +366,8 @@ function InterventionModal({
   const { order } = report;
   const tone = LEVEL_TONE[report.riskLevel];
   const amount = order.price * order.quantity;
+  // 지배 편향은 서버 판정(dominantKey)을 따른다 — lib/bias.ts 주석 참조
+  const dominant = dominantBias(report);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -395,7 +400,9 @@ function InterventionModal({
       >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-ink-800 bg-ink-950 px-5 pb-4 pt-5">
           <div>
-            <p className="label text-risk-soft">주문 실행 직전</p>
+            <p className="label text-risk-soft">
+              주문 실행 직전{dominant ? ` · ${BIAS_LABEL[dominant]}` : ""}
+            </p>
             <h2
               id="intervention-title"
               className="mt-1 text-xl font-bold text-ink-100"
@@ -451,7 +458,7 @@ function InterventionModal({
         </section>
 
         <section className="space-y-5 px-5 py-6">
-          <WarningBox warning={report.warning} />
+          <WarningBox warning={report.warning} dominantKey={dominant} />
           <InterventionActions
             suggestions={report.suggestions}
             riskScore={report.riskScore}

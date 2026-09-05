@@ -94,6 +94,7 @@ def test_개입_엔드포인트():
         "baseScore",
         "contributions",
         "warning",
+        "dominantKey",
         "suggestions",
     }
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
@@ -117,10 +118,15 @@ def test_매도_주문도_판정된다():
     처분효과 룰의 MAX_CONTRIBUTION 은 25 라 점수로는 개입 임계(50)를 못 넘지만,
     개입 조건이 "룰 하나라도 발동" 이라 평가이익 종목 매도는 개입 대상이 된다
     (예전에는 매도 주문에 개입이 구조적으로 불가능했다).
+
+    ⚠ 페르소나가 chasing_prone 인 이유: 처분효과 룰은 **DEMO_AS_OF 에 그 종목을 실제로
+    보유 중이고 평가이익일 때만** 발동한다. 예전엔 disposition_prone 을 썼는데, 그
+    페르소나는 as_of 에 005930 을 안 들고 있는데도 청산된 옛 에피소드의 평가이익으로
+    발동하고 있었다(stale — 이 PR 에서 고침).
     """
     r = client.post(
         "/api/simulate-order",
-        params={"persona": "disposition_prone"},
+        params={"persona": "chasing_prone"},
         json={
             "ticker": "005930",
             "name": "삼성전자",
@@ -136,6 +142,27 @@ def test_매도_주문도_판정된다():
     assert body["riskScore"] < 50  # 점수 임계가 아니라 룰 발동으로 개입한 것이 맞는지
     detail = {c["label"]: c for c in body["contributions"]}["처분효과"]
     assert detail["value"] > 0
+    # 지배 편향을 서버가 정해서 내려준다 (프론트가 label 로 되짚지 않게)
+    assert body["dominantKey"] == "disposition"
+
+
+def test_미보유_종목_매도는_옛_평가이익으로_발동하지_않는다():
+    """stale 회귀 — as_of 에 안 들고 있는 종목의 SELL 은 처분효과 미판정.
+
+    실측(2026-09-05, DEMO_AS_OF=2026-08-18): 005930 을 보유 중인 페르소나는
+    rational_baseline·chasing_prone 둘뿐이다. 나머지 셋은 예전엔 청산된 옛
+    에피소드의 평가이익 때문에 전부 개입 판정을 받았다.
+    """
+    sell = {"ticker": "005930", "name": "삼성전자", "side": "SELL", "quantity": 5, "price": 280000}
+    non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
+    assert non_holders  # 데이터가 바뀌어 전원 보유가 되면 이 테스트는 의미가 없어진다
+
+    for persona in non_holders:
+        body = client.post("/api/simulate-order", params={"persona": persona}, json=sell).json()
+        disposition = {c["label"]: c for c in body["contributions"]}["처분효과"]
+        assert disposition["value"] == 0, persona
+        assert body["shouldIntervene"] is False, persona
+        assert body["dominantKey"] is None, persona
 
 
 DEMO_PREFILL_ORDER = {
@@ -143,8 +170,16 @@ DEMO_PREFILL_ORDER = {
     "name": "삼성전자",
     "side": "BUY",
     "quantity": 10,
-    "price": 290000,  # 캐시된 실제 종가(268,500원) 대비 +8% → 추격매수 발동
+    "price": 290000,
 }
+
+#: DEMO_AS_OF(2026-08-18) **당일** 종가. as_of 는 마지막 거래일이고 모의 주문은 그
+#: 이후에 넣으므로, 08-18 종가는 주문 시점에 이미 공시된 값이다(하루 당겨서 08-14
+#: 종가 274,500원을 쓰면 /api/universe 의 lastClose 와 어긋난다 — 08-17 은 광복절
+#: 대체휴일이라 휴장).
+#: 손계산: 290,000 / 268,500 − 1 = +8.01% ≥ SURGE_THRESHOLD(5%) → 추격매수 발동.
+PREFILL_REFERENCE_CLOSE = 268_500
+PREFILL_CHANGE_RATE = 8.01
 
 
 def _holds_at_as_of(persona: str, ticker: str) -> bool:
@@ -158,46 +193,63 @@ def _holds_at_as_of(persona: str, ticker: str) -> bool:
 
 
 def test_점수가_낮아도_룰이_발동하면_개입한다():
-    """데모 프리필 주문(web/src/lib/api.ts DEMO_ORDER)이 보유 중인 페르소나에서 팝업까지 간다.
+    """데모 프리필 주문(web/src/lib/api.ts DEMO_ORDER)이 페르소나 **5종 전부**에서 팝업까지 간다.
 
     기여식이 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라 합성 페르소나(한 축만 강함)는
     50점에 못 닿는다 — 그래도 개입은 떠야 한다(개입 조건 = 룰 하나라도 triggered).
 
-    ⚠ 5종 전부가 아니라 "DEMO_AS_OF 에 005930 을 보유 중인 페르소나"만 뜬다. 추격매수
-    룰은 직전 종가가 있어야 급등률을 계산하는데, 그 종가의 유일한 출처인 timeline 은
-    보유 기간에만 존재하기 때문이다(core/rules/chasing_rule.py). 미보유 페르소나는
-    몇 영업일 전에 청산한 옛 종가와 비교하는 대신 미판정으로 빠진다 — 예전에는 그
-    stale 종가로 전원 발동해서 5종 전부 팝업이 떴다.
+    ⚠ 예전에는 보유 중인 2종(rational_baseline·chasing_prone)만 떴다. 추격매수 룰의
+    기준 종가 출처가 timeline(=보유 기간에만 존재)이었기 때문이다. 이제 시세 캐시에서
+    읽으므로 미보유 종목의 신규 진입 추격매수도 판정된다.
     """
-    holders = [p for p in PRESETS if _holds_at_as_of(p, "005930")]
-    # 데모 기본 페르소나(web DEMO_PERSONA)는 반드시 보유 중이어야 시연이 성립한다
-    assert "chasing_prone" in holders
-
-    for persona in holders:
+    for persona in PRESETS:
         r = client.post("/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["shouldIntervene"] is True, persona
         assert body["riskScore"] < 50, persona  # 점수 임계였다면 안 떴을 주문
+        # 전원 추격매수가 지배 편향 — 프리필 주문이 +5.65% 급등가라 이 룰이 먼저 잡는다
+        assert body["dominantKey"] == "chasing", persona
 
 
-def test_미보유_종목_프리필_주문은_옛_종가로_발동하지_않는다():
-    """청산한 지 여러 영업일 지난 종목은 "직전 종가"가 없어 추격매수 미판정.
+def test_프리필_주문의_등락률은_as_of_당일_종가_기준이다():
+    """표시용 changeRate · 추격매수 룰 · /api/universe 가 **같은 종가**를 본다.
 
-    stale timeline 회귀 방어 — 룰 단위 검증은 tests/test_rules_chasing.py.
+    예전에는 changeRate 를 timeline 마지막 행의 close 로 계산해서, 미보유 종목이면
+    0.0% 로 나가고 보유 중이어도 룰이 쓴 종가와 다른 값을 가리켰다. 그 다음엔 룰만
+    as_of 당일을 빼서(274,500 · 08-14) 주문 폼의 기준 종가(268,500 · 08-18)와 하루
+    어긋났다 — 지금은 core/rules/base.reference_close 하나로 통일돼 있다.
     """
+    for persona in PRESETS:
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
+        assert body["order"]["changeRate"] == pytest.approx(PREFILL_CHANGE_RATE, abs=0.01), persona
+        detail = {c["label"]: c for c in body["contributions"]}["추격매수"]["detail"]
+        assert f"{PREFILL_REFERENCE_CLOSE:,}" in detail, persona
+
+    # 주문 폼 기본값(/api/universe)도 같은 종가여야 한다 — 화면 두 곳이 다른 숫자를
+    # 보여주면 사용자에겐 그냥 틀린 값이다
+    items = client.get("/api/universe", params={"persona": "chasing_prone"}).json()
+    samsung = next(i for i in items if i["ticker"] == "005930")
+    assert samsung["lastClose"] == pytest.approx(PREFILL_REFERENCE_CLOSE)
+    assert samsung["lastDate"] == service.DEMO_AS_OF.isoformat()
+
+
+def test_미보유_종목_신규진입_추격매수도_판정된다():
+    """PR 26 회귀 — 미보유 종목 BUY 가 "판정 불가"로 빠지면 안 된다."""
     non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
     assert non_holders  # 데이터가 바뀌어 전원 보유가 되면 이 테스트는 의미가 없어진다
 
     for persona in non_holders:
-        r = client.post("/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER)
-        assert r.status_code == 200, r.text
-        body = r.json()
-        # 미보유 + 마지막 종가가 MAX_STALE_BUSINESS_DAYS 를 넘긴 상태(현재 합성 데이터
-        # 기준) → BUY 는 세 룰 모두 근거가 없어 개입 없음
-        assert body["shouldIntervene"] is False, persona
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
         chasing = {c["label"]: c for c in body["contributions"]}["추격매수"]
-        assert chasing["value"] == 0, persona
+        assert body["shouldIntervene"] is True, persona
+        assert "기준 종가" in chasing["detail"], persona
+        # 물타기는 보유가 없으면 성립하지 않는다 — 추격매수만 발동한 것이 맞는지
+        assert {c["label"]: c for c in body["contributions"]}["물타기"]["value"] == 0, persona
 
 
 # ── 주문 유니버스 ────────────────────────────────────────────────────────────
