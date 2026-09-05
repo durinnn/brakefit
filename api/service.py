@@ -579,7 +579,9 @@ def simulate_order(
         quantity=order_req.quantity,
         price=order_req.price,
     )
-    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes)
+    # as_of 를 같이 넘긴다 — 룰이 "지금 보유 중인가 / 직전 종가가 최신인가"를 판단할 때
+    # 기준 시점이 필요하다(core/rules/chasing_rule.py 모듈 docstring).
+    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes, as_of)
 
     contributions = [
         RiskContribution(

@@ -132,7 +132,11 @@ def run(trades: pd.DataFrame, as_of: date | None = None) -> BacktestResult:
             quantity=int(t["quantity"]),
             price=float(t["price"]),
         )
-        report = rules_engine.evaluate(order, metric_results, prior_timeline, prior_episodes)
+        # as_of 는 판정 시점(cutoff) 그대로 — 룰이 "그 시점에 보유 중이었나 / 마지막
+        # 종가가 그 시점 기준으로 최신인가"를 이걸로 판단한다. 미래는 여전히 안 넘어간다.
+        report = rules_engine.evaluate(
+            order, metric_results, prior_timeline, prior_episodes, cutoff
+        )
 
         backtestable = [
             c for c in report.contributions if c.key in BACKTESTABLE_KEYS and c.triggered

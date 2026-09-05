@@ -9,6 +9,8 @@ API 의 POST /simulate-order 가 이 함수 하나를 호출하면 된다.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 from core.metrics.base import MetricResult, clamp
@@ -20,9 +22,15 @@ def evaluate(
     proposed_order: ProposedOrder,
     metric_results: list[MetricResult],
     timeline: pd.DataFrame,
-    episodes: pd.DataFrame,  # noqa: ARG001 — 인터페이스 통일, 향후 룰 추가 시 사용
+    episodes: pd.DataFrame,
+    as_of: date | None = None,
 ) -> InterventionReport:
-    """주문 하나에 세 룰을 모두 평가해 InterventionReport 를 반환한다."""
+    """주문 하나에 세 룰을 모두 평가해 InterventionReport 를 반환한다.
+
+    timeline/episodes 는 engine.build(as_of=...) 의 출력을, as_of 는 그때 쓴 값을
+    그대로 넘긴다. episodes 는 "지금 이 종목을 들고 있는가"(is_open)의 유일한 근거라
+    없으면 청산된 옛 포지션을 현재 상태로 착각한다 — 각 룰 docstring 참조.
+    """
     scores_by_key = {m.key: m.score_0_100 for m in metric_results}
 
     # metric_results 가 없는 경우: 과거 편향 이력 없음 → 기여 0
@@ -30,8 +38,8 @@ def evaluate(
     avg_score = scores_by_key.get("averaging_down", 0.0)
     chase_score = scores_by_key.get("chasing", 0.0)
 
-    chase_result = chasing_rule.evaluate(proposed_order, chase_score, timeline)
-    avg_result = averaging_down_rule.evaluate(proposed_order, avg_score, timeline)
+    chase_result = chasing_rule.evaluate(proposed_order, chase_score, timeline, episodes, as_of)
+    avg_result = averaging_down_rule.evaluate(proposed_order, avg_score, timeline, episodes)
     disp_result = disposition_rule.evaluate(proposed_order, disp_score, timeline)
 
     # 워터폴 순서: 기여가 큰 룰 먼저 (시퀀스 다이어그램 예시와 맞춤)
