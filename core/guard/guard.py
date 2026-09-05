@@ -77,13 +77,18 @@ def _build_user_prompt(context: str, evidence: list[dict], triggered_keys: list[
     )
 
 
-_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+# 언어 태그는 json 말고도 뭐가 붙을지 모른다(JSON·js 등) — 알파벳이면 다 벗긴다.
+_CODE_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*\n?(.*?)\n?```$", re.DOTALL)
 
 
 def _strip_code_fence(text: str) -> str:
     """haiku 가 "다른 텍스트는 출력하지 마세요" 지시를 무시하고 ```json ... ``` 로
     감싸서 응답하는 경우가 있다 — 실측 확인됨(라이브 호출 시 매번은 아니지만 재현됨).
     그대로 두면 json.loads 가 백틱 때문에 파싱 실패 → 불필요하게 폴백 템플릿으로 빠진다.
+
+    펜스가 응답 전체를 감쌀 때만(^...$) 벗긴다. 앞뒤에 잡설이 붙은 응답은 손대지 않고
+    그대로 돌려줘서 json.loads 에서 실패 → 폴백으로 보낸다 — 지시를 크게 벗어난 응답을
+    부분 추출로 억지로 살리는 것보다, 검증된 고정 문구를 쓰는 편이 안전하다.
     """
     match = _CODE_FENCE_RE.match(text)
     return match.group(1).strip() if match else text

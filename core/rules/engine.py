@@ -9,20 +9,38 @@ API 의 POST /simulate-order 가 이 함수 하나를 호출하면 된다.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 from core.metrics.base import MetricResult, clamp
 from core.rules import averaging_down_rule, chasing_rule, disposition_rule
-from core.rules.base import INTERVENE_THRESHOLD, InterventionReport, ProposedOrder
+from core.rules.base import (
+    INTERVENE_THRESHOLD,
+    InterventionReport,
+    PriceSource,
+    ProposedOrder,
+)
 
 
 def evaluate(
     proposed_order: ProposedOrder,
     metric_results: list[MetricResult],
     timeline: pd.DataFrame,
-    episodes: pd.DataFrame,  # noqa: ARG001 — 인터페이스 통일, 향후 룰 추가 시 사용
+    episodes: pd.DataFrame,
+    as_of: date | None = None,
+    price_source: PriceSource | None = None,
 ) -> InterventionReport:
-    """주문 하나에 세 룰을 모두 평가해 InterventionReport 를 반환한다."""
+    """주문 하나에 세 룰을 모두 평가해 InterventionReport 를 반환한다.
+
+    timeline/episodes 는 engine.build(as_of=...) 의 출력을, as_of 는 그때 쓴 값을
+    그대로 넘긴다. episodes 는 "지금 이 종목을 들고 있는가"(is_open)의 유일한 근거라
+    없으면 청산된 옛 포지션을 현재 상태로 착각한다 — 각 룰 docstring 참조.
+
+    as_of 는 "지금 보유 중인가" 판단 외에 **기준 종가의 경계**로도 쓰인다 — 추격매수·
+    처분효과 룰이 as_of 직전 영업일 종가를 시세 캐시에서 읽는다(core/rules/base).
+    price_source 는 그 조회기를 갈아끼우는 자리(테스트용 fake 주입).
+    """
     scores_by_key = {m.key: m.score_0_100 for m in metric_results}
 
     # metric_results 가 없는 경우: 과거 편향 이력 없음 → 기여 0
@@ -30,9 +48,11 @@ def evaluate(
     avg_score = scores_by_key.get("averaging_down", 0.0)
     chase_score = scores_by_key.get("chasing", 0.0)
 
-    chase_result = chasing_rule.evaluate(proposed_order, chase_score, timeline)
-    avg_result = averaging_down_rule.evaluate(proposed_order, avg_score, timeline)
-    disp_result = disposition_rule.evaluate(proposed_order, disp_score, timeline)
+    chase_result = chasing_rule.evaluate(proposed_order, chase_score, as_of, price_source)
+    avg_result = averaging_down_rule.evaluate(proposed_order, avg_score, timeline, episodes)
+    disp_result = disposition_rule.evaluate(
+        proposed_order, disp_score, timeline, episodes, as_of, price_source
+    )
 
     # 워터폴 순서: 기여가 큰 룰 먼저 (시퀀스 다이어그램 예시와 맞춤)
     contributions = [chase_result, avg_result, disp_result]
@@ -54,4 +74,7 @@ def evaluate(
         risk_score=round(risk_score, 2),
         contributions=contributions,
         should_intervene=should_intervene,
+        # 룰별 미판정 사유를 한데 모아 올려보낸다 — 여기서 버리면 "발동 안 함"과
+        # "시세를 못 구해 판정 못 함"이 화면상 구분되지 않는다.
+        warnings=[w for c in contributions for w in c.warnings],
     )

@@ -15,3 +15,6 @@ __pycache__/
 # IDE 개인 설정 — 사람마다 다르고 코드와 무관, 노이즈만 발생시킴
 .idea/
 .vscode/
+
+# 에이전트 작업용 git worktree — 레포 안에 생기지만 추적 대상이 아니다
+.claude/worktrees/

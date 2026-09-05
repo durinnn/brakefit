@@ -19,7 +19,7 @@ import re
 import tempfile
 from collections import OrderedDict
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -49,10 +49,14 @@ from core.metrics import averaging_down, chasing, disposition
 from core.parser import kb_hts
 from core.parser.reader import UnreadableExport
 from core.rules import engine as rules_engine
-from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
+from core.rules.base import (
+    INTERVENE_THRESHOLD,
+    ProposedOrder,
+    ReferenceClose,
+    reference_close,
+)
 from core.synth.generator import DEFAULT_UNIVERSE, generate_trades
 from core.synth.personas import NOT_REAL_USER_DISCLAIMER, PRESETS
-from core.synth.prices import get_daily_close
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +66,6 @@ METRIC_MODULES = (disposition, averaging_down, chasing)
 # 8종목보다 3종목이 매 요청마다 더 가볍다.
 DEMO_UNIVERSE = {"005930": "삼성전자", "000660": "SK하이닉스", "035420": "NAVER"}
 DEMO_AS_OF = date(2026, 8, 18)  # data/cache/prices/ 캐시 범위 안 — 네트워크 불필요
-
-#: 유니버스의 "최근 종가"를 찾을 때 as_of 에서 거꾸로 훑는 달력일수.
-#: 좁을수록 커밋된 캐시(data/cache/prices, 2025-11 ~) 안에서 끝나 네트워크를 안 탄다.
-#: 14일이면 설·추석 연휴(최장 5영업일 휴장)를 넘겨도 종가가 최소 하나는 들어온다.
-UNIVERSE_LOOKBACK_DAYS = 14
 
 GRADE_THRESHOLDS = (40.0, 70.0)  # score < 40 안정 / < 70 주의 / else 위험
 RISK_LEVEL_THRESHOLDS = (INTERVENE_THRESHOLD * 0.6, INTERVENE_THRESHOLD)  # LOW / MEDIUM / HIGH
@@ -471,26 +470,21 @@ def _percentile(key: str, score: float) -> float:
 # ── ⓪ 주문 유니버스 ─────────────────────────────────────────────────────────
 
 
-def _last_close_at_or_before(ticker: str, as_of: date) -> tuple[float, str] | None:
-    """as_of **이하** 날짜의 마지막 종가 → (종가, 날짜 ISO). 못 구하면 None.
+def _reference_close(ticker: str, as_of: date) -> ReferenceClose | None:
+    """주문 폼의 기본값·표시용 등락률이 공유하는 기준 종가. 못 구하면 사유를 로그로.
 
-    ⚠ 룩어헤드 금지(AGENTS.md 절대규칙 1): 조회 구간의 끝을 as_of 로 못박는다.
-    get_daily_close() 가 [start, end] 로 잘라서 주므로 as_of 다음 날 종가는 애초에
-    이 함수 안으로 들어오지 못한다 — "마지막 행"을 집어도 미래를 볼 수 없다.
+    ⚠ 룰(core/rules/base.reference_close)과 **같은 함수**를 쓴다. 예전에는 유니버스만
+    as_of 당일을 포함하고 룰은 뺐는데, 그래서 주문 폼에 뜬 기준 종가(268,500 · 08-18)
+    와 판정 결과의 changeRate 기준(274,500 · 08-14)이 서로 다른 날을 가리켰다.
 
-    예외를 502 로 승격시키지 않고 None 으로 삼키는 게 여기서는 맞다. 이 값은 주문 폼의
-    기본값(편의) 이라, 시세 한 종목을 못 구했다고 종목 목록 전체를 못 주는 게 더 나쁘다.
-    사유를 잃지 않도록 로그에는 남긴다.
+    예외를 502 로 승격시키지 않고 None 으로 삼키는 게 여기서는 맞다. 이 값은 표시용
+    (주문 폼 기본값·등락률)이라, 시세 한 종목을 못 구했다고 종목 목록 전체를 못 주는
+    게 더 나쁘다. 사유를 잃지 않도록 로그에는 남긴다.
     """
-    try:
-        series = get_daily_close(ticker, as_of - timedelta(days=UNIVERSE_LOOKBACK_DAYS), as_of)
-    except Exception:
-        logger.warning("%s: %s 이하 종가 조회 실패 — 주문 폼 기본값 없이 진행", ticker, as_of)
-        return None
-    if series.empty:
-        return None
-    last = series.index[-1]
-    return round(float(series.iloc[-1]), 2), last.date().isoformat()
+    ref, warning = reference_close(ticker, as_of)
+    if warning:
+        logger.warning("기준 종가 없이 진행: %s", warning)
+    return ref
 
 
 def universe(persona_key: str, *, session_id: str | None = None) -> list[UniverseItem]:
@@ -504,13 +498,13 @@ def universe(persona_key: str, *, session_id: str | None = None) -> list[Univers
     _trades, as_of, tickers = _resolve_trades(persona_key, session_id)
     items: list[UniverseItem] = []
     for ticker, name in tickers.items():
-        close = _last_close_at_or_before(ticker, as_of)
+        ref = _reference_close(ticker, as_of)
         items.append(
             UniverseItem(
                 ticker=ticker,
                 name=name,
-                last_close=close[0] if close else None,
-                last_date=close[1] if close else None,
+                last_close=round(ref.close, 2) if ref else None,
+                last_date=ref.date.isoformat() if ref else None,
             )
         )
     return items
@@ -579,7 +573,13 @@ def simulate_order(
         quantity=order_req.quantity,
         price=order_req.price,
     )
-    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes)
+    # as_of 를 같이 넘긴다 — 룰이 "지금 보유 중인가 / 기준 종가를 어디까지 볼지"를 정할 때
+    # 기준 시점이 필요하다(core/rules/chasing_rule.py 모듈 docstring).
+    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes, as_of)
+    for w in report.warnings:
+        # 룰이 판정을 못 한 사유(시세 조회 실패 등). 응답 스키마에는 아직 자리가 없어
+        # 로그로만 남긴다 — 그래도 삼키지는 않는다(AGENTS.md).
+        logger.warning("판정 경고 [%s %s]: %s", order.ticker, order.side, w)
 
     contributions = [
         RiskContribution(
@@ -628,12 +628,14 @@ def simulate_order(
     else:
         risk_level = "HIGH"
 
-    change_rate = 0.0
-    holding = result.timeline[result.timeline["ticker"] == order.ticker]
-    if not holding.empty:
-        prev_close = holding.sort_values("date").iloc[-1]["close"]
-        if prev_close:
-            change_rate = round((order.price - prev_close) / prev_close * 100, 2)
+    # 표시용 등락률도 룰이 판정에 쓴 것과 **같은 종가**를 기준으로 한다. 예전에는
+    # timeline 마지막 행의 close 를 썼는데(= 보유 기간에만 존재 + 청산된 옛 에피소드면
+    # stale), 화면의 "기준 종가 대비 %"와 추격매수 룰의 급등률이 서로 다른 숫자를
+    # 가리켰다. 미보유 종목은 아예 0.0% 로 나갔고.
+    # /api/universe 의 lastClose 와도 같은 헬퍼다 — 폼에 뜬 종가와 팝업의 기준이 갈리면
+    # 사용자에겐 그냥 틀린 숫자로 보인다.
+    ref = _reference_close(order.ticker, as_of)
+    change_rate = round((order.price - ref.close) / ref.close * 100, 2) if ref else 0.0
 
     return InterventionReport(
         order=PendingOrder(
@@ -650,6 +652,9 @@ def simulate_order(
         base_score=0.0,
         contributions=contributions,
         warning=warning,
+        # 지배 편향을 프론트가 contributions 의 value 최댓값으로 되짚지 않게 그대로 싣는다.
+        # label 문자열로 룰을 역추적하는 코드는 라벨을 바꾸는 순간 조용히 틀린다.
+        dominant_key=BIAS_KEY_TO_FRONTEND[dominant.key] if report.should_intervene else None,
         suggestions=_suggestions(
             report.should_intervene, dominant.key if report.should_intervene else None
         ),

@@ -93,6 +93,11 @@ class InterventionReport(CamelModel):
     base_score: float = Field(serialization_alias="baseScore")
     contributions: list[RiskContribution]
     warning: PatternWarning
+    #: 이번 판정을 주도한 편향(BiasKey). 개입이 아니면 None.
+    #: 프론트가 contributions 의 value 최댓값이나 label 문자열로 되짚지 않게 하려고
+    #: 서버가 정해서 내려준다 — 지배 편향 규칙("발동한 룰 중 기여 최대")은 core/rules
+    #: 의 개입 조건과 붙어 있어서, 라벨만 보는 클라이언트는 규칙이 바뀔 때 조용히 틀린다.
+    dominant_key: str | None = Field(default=None, serialization_alias="dominantKey")
     suggestions: list[str]
 
 
