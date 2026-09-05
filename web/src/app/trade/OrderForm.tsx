@@ -19,6 +19,7 @@ import type { InterventionDecision } from "@/components/InterventionActions";
 import WaterfallChart from "@/components/WaterfallChart";
 import WarningBox from "@/components/WarningBox";
 import { DEMO_ORDER, simulateOrder, type DataSource } from "@/lib/api";
+import { BIAS_LABEL, dominantBias } from "@/lib/bias";
 import { formatWon } from "@/lib/format";
 import { clearClientSession, readClientSession } from "@/lib/session";
 import type { InterventionReport, OrderInput, UniverseItem } from "@/lib/types";
@@ -363,6 +364,8 @@ function InterventionModal({
   const { order } = report;
   const tone = LEVEL_TONE[report.riskLevel];
   const amount = order.price * order.quantity;
+  // 지배 편향은 서버 판정(dominantKey)을 따른다 — lib/bias.ts 주석 참조
+  const dominant = dominantBias(report);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -395,7 +398,9 @@ function InterventionModal({
       >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-ink-800 bg-ink-950 px-5 pb-4 pt-5">
           <div>
-            <p className="label text-risk-soft">주문 실행 직전</p>
+            <p className="label text-risk-soft">
+              주문 실행 직전{dominant ? ` · ${BIAS_LABEL[dominant]}` : ""}
+            </p>
             <h2
               id="intervention-title"
               className="mt-1 text-xl font-bold text-ink-100"
@@ -451,7 +456,7 @@ function InterventionModal({
         </section>
 
         <section className="space-y-5 px-5 py-6">
-          <WarningBox warning={report.warning} />
+          <WarningBox warning={report.warning} dominantKey={dominant} />
           <InterventionActions
             suggestions={report.suggestions}
             riskScore={report.riskScore}

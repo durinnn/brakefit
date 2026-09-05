@@ -1,7 +1,15 @@
-import type { PatternWarning } from "@/lib/types";
+import { BIAS_LABEL } from "@/lib/bias";
+import type { BiasKey, PatternWarning } from "@/lib/types";
 
 /** 과거 패턴 기반 붉은색 경고 박스. 개입 화면의 최종 설득 장치. */
-export default function WarningBox({ warning }: { warning: PatternWarning }) {
+export default function WarningBox({
+  warning,
+  dominantKey = null,
+}: {
+  warning: PatternWarning;
+  /** 이번 판정을 주도한 편향(서버 판정). 모르면 배지를 안 그린다. */
+  dominantKey?: BiasKey | null;
+}) {
   return (
     <section
       role="alert"
@@ -14,6 +22,11 @@ export default function WarningBox({ warning }: { warning: PatternWarning }) {
         <span className="text-xs font-semibold uppercase tracking-wider text-risk-soft">
           과거 패턴 경고
         </span>
+        {dominantKey ? (
+          <span className="rounded-full bg-risk/20 px-2 py-0.5 text-[11px] font-semibold text-risk-soft">
+            {BIAS_LABEL[dominantKey]}
+          </span>
+        ) : null}
       </div>
 
       <p className="mt-3 text-lg font-bold leading-snug text-risk-soft">

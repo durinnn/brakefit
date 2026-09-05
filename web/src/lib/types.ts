@@ -86,6 +86,13 @@ export interface InterventionReport {
   baseScore: number;
   contributions: RiskContribution[];
   warning: PatternWarning;
+  /**
+   * 이번 판정을 주도한 편향. 개입이 아니면 null.
+   * 지배 편향 규칙("발동한 룰 중 기여 최대")은 서버(core/rules)에만 있어야 한다 —
+   * contributions 의 value 최댓값이나 label 문자열로 되짚으면 규칙·라벨이 바뀔 때
+   * 프론트만 조용히 틀린다. 구버전 백엔드 응답에는 없을 수 있어 optional 이다.
+   */
+  dominantKey?: BiasKey | null;
   /** 시스템이 제안하는 대안 행동 */
   suggestions: string[];
 }
