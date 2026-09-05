@@ -5,6 +5,7 @@ DEMO_AS_OF 가 캐시 범위 안이라 네트워크 없이 재현된다.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -89,12 +90,17 @@ def test_개입_엔드포인트():
         "order",
         "riskScore",
         "riskLevel",
+        "shouldIntervene",
         "baseScore",
         "contributions",
         "warning",
         "suggestions",
     }
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
+    # 프론트가 riskLevel 로 개입 여부를 재유도하지 않도록 판정 결과를 그대로 싣는다.
+    # 개입 조건이 "룰 하나라도 발동" 이라(core/rules/engine.py) 둘은 더 이상 동치가
+    # 아니다 — 점수 임계는 OR 로 남아 있으므로 HIGH 면 반드시 개입이라는 방향만 성립한다.
+    assert body["riskLevel"] != "HIGH" or body["shouldIntervene"] is True
     assert len(body["contributions"]) == 3
     assert len(body["suggestions"]) >= 1
     assert set(body["warning"].keys()) == {"headline", "caseCount", "averageReturn", "description"}
@@ -103,6 +109,98 @@ def test_개입_엔드포인트():
     # 어느 룰이 dominant 인지에 따라 부호가 갈리므로 여기서는 존재 여부만 확인한다
     if body["warning"]["caseCount"] == 0:
         assert body["warning"]["averageReturn"] == 0.0
+
+
+def test_매도_주문도_판정된다():
+    """SELL 은 처분효과 룰(core/rules/disposition_rule)이 받는다 — 400 이 되면 안 된다.
+
+    처분효과 룰의 MAX_CONTRIBUTION 은 25 라 점수로는 개입 임계(50)를 못 넘지만,
+    개입 조건이 "룰 하나라도 발동" 이라 평가이익 종목 매도는 개입 대상이 된다
+    (예전에는 매도 주문에 개입이 구조적으로 불가능했다).
+    """
+    r = client.post(
+        "/api/simulate-order",
+        params={"persona": "disposition_prone"},
+        json={
+            "ticker": "005930",
+            "name": "삼성전자",
+            "side": "SELL",
+            "quantity": 5,
+            "price": 280000,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["order"]["side"] == "SELL"
+    assert body["shouldIntervene"] is True
+    assert body["riskScore"] < 50  # 점수 임계가 아니라 룰 발동으로 개입한 것이 맞는지
+    detail = {c["label"]: c for c in body["contributions"]}["처분효과"]
+    assert detail["value"] > 0
+
+
+def test_점수가_낮아도_룰이_발동하면_개입한다():
+    """데모 프리필 주문(web/src/lib/api.ts DEMO_ORDER)이 페르소나 5종 전부에서 팝업까지 간다.
+
+    기여식이 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라 합성 페르소나(한 축만 강함)는
+    50점에 못 닿는다 — 이 테스트가 깨지면 심사 시연에서 팝업이 안 뜬다는 뜻이다.
+    """
+    for persona in PRESETS:
+        r = client.post(
+            "/api/simulate-order",
+            params={"persona": persona},
+            json={
+                "ticker": "005930",
+                "name": "삼성전자",
+                "side": "BUY",
+                "quantity": 10,
+                "price": 290000,  # 캐시된 실제 종가(268,500원) 대비 +8% → 추격매수 발동
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["shouldIntervene"] is True, persona
+        assert body["riskScore"] < 50, persona  # 점수 임계였다면 안 떴을 주문
+
+
+# ── 주문 유니버스 ────────────────────────────────────────────────────────────
+
+
+def test_유니버스_페르소나():
+    """페르소나 유니버스는 DEMO_UNIVERSE 그대로 + 종가는 DEMO_AS_OF 이하여야 한다."""
+    r = client.get("/api/universe", params={"persona": "chasing_prone"})
+    assert r.status_code == 200, r.text
+    items = r.json()
+
+    assert {i["ticker"] for i in items} == set(service.DEMO_UNIVERSE)
+    for item in items:
+        assert set(item.keys()) == {"ticker", "name", "lastClose", "lastDate"}
+        assert item["name"] == service.DEMO_UNIVERSE[item["ticker"]]
+        # 커밋된 시세 캐시가 DEMO_AS_OF 를 덮으므로 여기서는 종가가 반드시 나온다
+        assert item["lastClose"] is not None and item["lastClose"] > 0
+        # 룩어헤드 금지 — 기준일 다음 날 종가를 폼 기본값으로 흘리면 안 된다
+        assert date.fromisoformat(item["lastDate"]) <= service.DEMO_AS_OF
+
+
+def test_유니버스_세션(csv_session):
+    """세션 유니버스는 그 사람이 실제 거래한 종목 + 종가는 마지막 체결일 이하."""
+    r = client.get("/api/universe", params={"session": csv_session})
+    assert r.status_code == 200, r.text
+    items = r.json()
+    assert items
+
+    trades = service._SESSIONS[csv_session]
+    assert {i["ticker"] for i in items} == {str(t) for t in trades["ticker"].dropna()}
+
+    as_of = max(trades["traded_at"].dropna())
+    for item in items:
+        if item["lastDate"] is None:
+            continue  # 캐시에 없는 종목은 시세 없이 null 로 나가는 게 정상이다
+        assert date.fromisoformat(item["lastDate"]) <= as_of
+
+
+def test_유니버스도_모르는_세션은_404():
+    assert client.get("/api/universe", params={"session": "없는세션"}).status_code == 404
+    assert client.get("/api/universe", params={"persona": "does_not_exist"}).status_code == 404
 
 
 def test_백테스트_엔드포인트():

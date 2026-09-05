@@ -14,11 +14,12 @@ backtest)는 데이터 출처를 전혀 모른다 — docs/schema.md §1 이 유
 
 from __future__ import annotations
 
+import logging
 import re
 import tempfile
 from collections import OrderedDict
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from api.schemas import (
     PersonaInfo,
     RiskContribution,
     SimulateOrderRequest,
+    UniverseItem,
     UploadSummary,
 )
 from core import schema
@@ -50,6 +52,9 @@ from core.rules import engine as rules_engine
 from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
 from core.synth.generator import DEFAULT_UNIVERSE, generate_trades
 from core.synth.personas import NOT_REAL_USER_DISCLAIMER, PRESETS
+from core.synth.prices import get_daily_close
+
+logger = logging.getLogger(__name__)
 
 METRIC_MODULES = (disposition, averaging_down, chasing)
 
@@ -57,6 +62,11 @@ METRIC_MODULES = (disposition, averaging_down, chasing)
 # 8종목보다 3종목이 매 요청마다 더 가볍다.
 DEMO_UNIVERSE = {"005930": "삼성전자", "000660": "SK하이닉스", "035420": "NAVER"}
 DEMO_AS_OF = date(2026, 8, 18)  # data/cache/prices/ 캐시 범위 안 — 네트워크 불필요
+
+#: 유니버스의 "최근 종가"를 찾을 때 as_of 에서 거꾸로 훑는 달력일수.
+#: 좁을수록 커밋된 캐시(data/cache/prices, 2025-11 ~) 안에서 끝나 네트워크를 안 탄다.
+#: 14일이면 설·추석 연휴(최장 5영업일 휴장)를 넘겨도 종가가 최소 하나는 들어온다.
+UNIVERSE_LOOKBACK_DAYS = 14
 
 GRADE_THRESHOLDS = (40.0, 70.0)  # score < 40 안정 / < 70 주의 / else 위험
 RISK_LEVEL_THRESHOLDS = (INTERVENE_THRESHOLD * 0.6, INTERVENE_THRESHOLD)  # LOW / MEDIUM / HIGH
@@ -458,6 +468,54 @@ def _percentile(key: str, score: float) -> float:
     return round(below_or_equal / len(ref) * 100, 1)
 
 
+# ── ⓪ 주문 유니버스 ─────────────────────────────────────────────────────────
+
+
+def _last_close_at_or_before(ticker: str, as_of: date) -> tuple[float, str] | None:
+    """as_of **이하** 날짜의 마지막 종가 → (종가, 날짜 ISO). 못 구하면 None.
+
+    ⚠ 룩어헤드 금지(AGENTS.md 절대규칙 1): 조회 구간의 끝을 as_of 로 못박는다.
+    get_daily_close() 가 [start, end] 로 잘라서 주므로 as_of 다음 날 종가는 애초에
+    이 함수 안으로 들어오지 못한다 — "마지막 행"을 집어도 미래를 볼 수 없다.
+
+    예외를 502 로 승격시키지 않고 None 으로 삼키는 게 여기서는 맞다. 이 값은 주문 폼의
+    기본값(편의) 이라, 시세 한 종목을 못 구했다고 종목 목록 전체를 못 주는 게 더 나쁘다.
+    사유를 잃지 않도록 로그에는 남긴다.
+    """
+    try:
+        series = get_daily_close(ticker, as_of - timedelta(days=UNIVERSE_LOOKBACK_DAYS), as_of)
+    except Exception:
+        logger.warning("%s: %s 이하 종가 조회 실패 — 주문 폼 기본값 없이 진행", ticker, as_of)
+        return None
+    if series.empty:
+        return None
+    last = series.index[-1]
+    return round(float(series.iloc[-1]), 2), last.date().isoformat()
+
+
+def universe(persona_key: str, *, session_id: str | None = None) -> list[UniverseItem]:
+    """모의 주문 폼이 고를 수 있는 종목 목록.
+
+    페르소나면 DEMO_UNIVERSE, 업로드 세션이면 그 사람이 실제로 거래한 종목이다
+    (_resolve_trades 가 이미 갈라준다). 거래한 적 없는 종목은 timeline 이 없어서
+    브레이크 룰이 전부 skip 되므로 — 판정할 수 없는 종목을 고를 수 있게 두면
+    "브레이크가 안 걸리네" 로 오해하게 된다.
+    """
+    _trades, as_of, tickers = _resolve_trades(persona_key, session_id)
+    items: list[UniverseItem] = []
+    for ticker, name in tickers.items():
+        close = _last_close_at_or_before(ticker, as_of)
+        items.append(
+            UniverseItem(
+                ticker=ticker,
+                name=name,
+                last_close=close[0] if close else None,
+                last_date=close[1] if close else None,
+            )
+        )
+    return items
+
+
 # ── ① 진단 ───────────────────────────────────────────────────────────────────
 
 
@@ -532,28 +590,26 @@ def simulate_order(
         for c in report.contributions
     ]
 
-    dominant = max(report.contributions, key=lambda c: c.score)
+    # 지배 편향은 "발동한 룰 중 기여 최대" — 개입 조건이 triggered 기준이라(core/rules/engine.py)
+    # 과거 점수만 높고 이번 주문에선 발동하지 않은 룰이 팝업 문구를 가져가면 안 된다.
+    # 아무 룰도 발동 안 한 경우에만 기존대로 전체 중 최대를 쓴다(전부 0점이면 워터폴 첫 룰).
+    triggered = [c for c in report.contributions if c.triggered]
+    dominant = max(triggered or report.contributions, key=lambda c: c.score)
     dominant_metric = next((m for m in metric_results if m.key == dominant.key), None)
 
     if report.should_intervene and dominant.evidence:
         # 워터폴 순서(chasing → averaging_down → disposition)를 그대로 우선순위로 넘긴다 —
         # guard.get_order_fallback() 이 triggered_keys[0] 을 최우선 룰로 취급한다.
-        triggered_keys = [c.key for c in report.contributions if c.triggered]
+        triggered_keys = [c.key for c in triggered]
         coaching = generate_coaching(
             context="order_intervention",
             evidence=dominant.evidence,
             triggered_keys=triggered_keys,
         )
         headline, description = coaching.headline, coaching.body
-    elif dominant.triggered:
-        # 개별 룰은 트리거됐지만 합산 위험점수가 개입 기준(INTERVENE_THRESHOLD) 미만 —
-        # case_count 는 그대로 실제 이력 건수를 보여주므로 headline 이 "이력 없음"이라고
-        # 모순되게 말하지 않도록 분리해둔다.
-        headline = f"{BIAS_KEY_LABEL[dominant.key]} 이력이 있지만 위험 수준은 아님"
-        description = (
-            "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
-        )
     else:
+        # 발동한 룰이 하나라도 있으면 should_intervene 이 True 이므로 여기는 "아무것도
+        # 발동 안 함" 뿐이다 — 예전의 "발동은 했는데 점수가 임계 미만" 상태는 사라졌다.
         headline = "과거 패턴 이력 없음"
         description = "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
 
@@ -590,6 +646,7 @@ def simulate_order(
         ),
         risk_score=risk_score,
         risk_level=risk_level,
+        should_intervene=report.should_intervene,
         base_score=0.0,
         contributions=contributions,
         warning=warning,
@@ -670,4 +727,5 @@ __all__ = [
     "ingest_upload",
     "list_personas",
     "simulate_order",
+    "universe",
 ]

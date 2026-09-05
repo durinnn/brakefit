@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-INTERVENE_THRESHOLD = 50.0  # risk_score 이 이상이면 경고 팝업 표시
+# 개입 조건 중 점수 쪽 임계 — 주 조건은 "룰 하나라도 triggered" 다(core/rules/engine.py 참조)
+INTERVENE_THRESHOLD = 50.0
 
 
 @dataclass
@@ -44,4 +45,4 @@ class InterventionReport:
 
     risk_score: float  # 0~100
     contributions: list[RuleContribution]  # 순서: chasing → averaging_down → disposition
-    should_intervene: bool  # risk_score >= INTERVENE_THRESHOLD 이면 True
+    should_intervene: bool  # 룰 하나라도 triggered 이거나 risk_score >= INTERVENE_THRESHOLD
