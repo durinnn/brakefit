@@ -5,6 +5,7 @@ DEMO_AS_OF 가 캐시 범위 안이라 네트워크 없이 재현된다.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -89,12 +90,18 @@ def test_개입_엔드포인트():
         "order",
         "riskScore",
         "riskLevel",
+        "shouldIntervene",
         "baseScore",
         "contributions",
         "warning",
+        "dominantKey",
         "suggestions",
     }
     assert body["riskLevel"] in ("LOW", "MEDIUM", "HIGH")
+    # 프론트가 riskLevel 로 개입 여부를 재유도하지 않도록 판정 결과를 그대로 싣는다.
+    # 개입 조건이 "룰 하나라도 발동" 이라(core/rules/engine.py) 둘은 더 이상 동치가
+    # 아니다 — 점수 임계는 OR 로 남아 있으므로 HIGH 면 반드시 개입이라는 방향만 성립한다.
+    assert body["riskLevel"] != "HIGH" or body["shouldIntervene"] is True
     assert len(body["contributions"]) == 3
     assert len(body["suggestions"]) >= 1
     assert set(body["warning"].keys()) == {"headline", "caseCount", "averageReturn", "description"}
@@ -103,6 +110,187 @@ def test_개입_엔드포인트():
     # 어느 룰이 dominant 인지에 따라 부호가 갈리므로 여기서는 존재 여부만 확인한다
     if body["warning"]["caseCount"] == 0:
         assert body["warning"]["averageReturn"] == 0.0
+
+
+def test_매도_주문도_판정된다():
+    """SELL 은 처분효과 룰(core/rules/disposition_rule)이 받는다 — 400 이 되면 안 된다.
+
+    처분효과 룰의 MAX_CONTRIBUTION 은 25 라 점수로는 개입 임계(50)를 못 넘지만,
+    개입 조건이 "룰 하나라도 발동" 이라 평가이익 종목 매도는 개입 대상이 된다
+    (예전에는 매도 주문에 개입이 구조적으로 불가능했다).
+
+    ⚠ 페르소나가 chasing_prone 인 이유: 처분효과 룰은 **DEMO_AS_OF 에 그 종목을 실제로
+    보유 중이고 평가이익일 때만** 발동한다. 예전엔 disposition_prone 을 썼는데, 그
+    페르소나는 as_of 에 005930 을 안 들고 있는데도 청산된 옛 에피소드의 평가이익으로
+    발동하고 있었다(stale — 이 PR 에서 고침).
+    """
+    r = client.post(
+        "/api/simulate-order",
+        params={"persona": "chasing_prone"},
+        json={
+            "ticker": "005930",
+            "name": "삼성전자",
+            "side": "SELL",
+            "quantity": 5,
+            "price": 280000,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["order"]["side"] == "SELL"
+    assert body["shouldIntervene"] is True
+    assert body["riskScore"] < 50  # 점수 임계가 아니라 룰 발동으로 개입한 것이 맞는지
+    detail = {c["label"]: c for c in body["contributions"]}["처분효과"]
+    assert detail["value"] > 0
+    # 지배 편향을 서버가 정해서 내려준다 (프론트가 label 로 되짚지 않게)
+    assert body["dominantKey"] == "disposition"
+
+
+def test_미보유_종목_매도는_옛_평가이익으로_발동하지_않는다():
+    """stale 회귀 — as_of 에 안 들고 있는 종목의 SELL 은 처분효과 미판정.
+
+    실측(2026-09-05, DEMO_AS_OF=2026-08-18): 005930 을 보유 중인 페르소나는
+    rational_baseline·chasing_prone 둘뿐이다. 나머지 셋은 예전엔 청산된 옛
+    에피소드의 평가이익 때문에 전부 개입 판정을 받았다.
+    """
+    sell = {"ticker": "005930", "name": "삼성전자", "side": "SELL", "quantity": 5, "price": 280000}
+    non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
+    assert non_holders  # 데이터가 바뀌어 전원 보유가 되면 이 테스트는 의미가 없어진다
+
+    for persona in non_holders:
+        body = client.post("/api/simulate-order", params={"persona": persona}, json=sell).json()
+        disposition = {c["label"]: c for c in body["contributions"]}["처분효과"]
+        assert disposition["value"] == 0, persona
+        assert body["shouldIntervene"] is False, persona
+        assert body["dominantKey"] is None, persona
+
+
+DEMO_PREFILL_ORDER = {
+    "ticker": "005930",
+    "name": "삼성전자",
+    "side": "BUY",
+    "quantity": 10,
+    "price": 290000,
+}
+
+#: DEMO_AS_OF(2026-08-18) **당일** 종가. as_of 는 마지막 거래일이고 모의 주문은 그
+#: 이후에 넣으므로, 08-18 종가는 주문 시점에 이미 공시된 값이다(하루 당겨서 08-14
+#: 종가 274,500원을 쓰면 /api/universe 의 lastClose 와 어긋난다 — 08-17 은 광복절
+#: 대체휴일이라 휴장).
+#: 손계산: 290,000 / 268,500 − 1 = +8.01% ≥ SURGE_THRESHOLD(5%) → 추격매수 발동.
+PREFILL_REFERENCE_CLOSE = 268_500
+PREFILL_CHANGE_RATE = 8.01
+
+
+def _holds_at_as_of(persona: str, ticker: str) -> bool:
+    """DEMO_AS_OF 시점에 그 종목을 실제로 들고 있는가(= 열린 에피소드가 있는가)."""
+    from core.engine.engine import build
+
+    trades = service._persona_trades(persona)
+    episodes = build(trades, as_of=service.DEMO_AS_OF).episodes
+    rows = episodes[episodes["ticker"] == ticker]
+    return bool(not rows.empty and rows["is_open"].any())
+
+
+def test_점수가_낮아도_룰이_발동하면_개입한다():
+    """데모 프리필 주문(web/src/lib/api.ts DEMO_ORDER)이 페르소나 **5종 전부**에서 팝업까지 간다.
+
+    기여식이 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라 합성 페르소나(한 축만 강함)는
+    50점에 못 닿는다 — 그래도 개입은 떠야 한다(개입 조건 = 룰 하나라도 triggered).
+
+    ⚠ 예전에는 보유 중인 2종(rational_baseline·chasing_prone)만 떴다. 추격매수 룰의
+    기준 종가 출처가 timeline(=보유 기간에만 존재)이었기 때문이다. 이제 시세 캐시에서
+    읽으므로 미보유 종목의 신규 진입 추격매수도 판정된다.
+    """
+    for persona in PRESETS:
+        r = client.post("/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["shouldIntervene"] is True, persona
+        assert body["riskScore"] < 50, persona  # 점수 임계였다면 안 떴을 주문
+        # 전원 추격매수가 지배 편향 — 프리필 주문이 +5.65% 급등가라 이 룰이 먼저 잡는다
+        assert body["dominantKey"] == "chasing", persona
+
+
+def test_프리필_주문의_등락률은_as_of_당일_종가_기준이다():
+    """표시용 changeRate · 추격매수 룰 · /api/universe 가 **같은 종가**를 본다.
+
+    예전에는 changeRate 를 timeline 마지막 행의 close 로 계산해서, 미보유 종목이면
+    0.0% 로 나가고 보유 중이어도 룰이 쓴 종가와 다른 값을 가리켰다. 그 다음엔 룰만
+    as_of 당일을 빼서(274,500 · 08-14) 주문 폼의 기준 종가(268,500 · 08-18)와 하루
+    어긋났다 — 지금은 core/rules/base.reference_close 하나로 통일돼 있다.
+    """
+    for persona in PRESETS:
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
+        assert body["order"]["changeRate"] == pytest.approx(PREFILL_CHANGE_RATE, abs=0.01), persona
+        detail = {c["label"]: c for c in body["contributions"]}["추격매수"]["detail"]
+        assert f"{PREFILL_REFERENCE_CLOSE:,}" in detail, persona
+
+    # 주문 폼 기본값(/api/universe)도 같은 종가여야 한다 — 화면 두 곳이 다른 숫자를
+    # 보여주면 사용자에겐 그냥 틀린 값이다
+    items = client.get("/api/universe", params={"persona": "chasing_prone"}).json()
+    samsung = next(i for i in items if i["ticker"] == "005930")
+    assert samsung["lastClose"] == pytest.approx(PREFILL_REFERENCE_CLOSE)
+    assert samsung["lastDate"] == service.DEMO_AS_OF.isoformat()
+
+
+def test_미보유_종목_신규진입_추격매수도_판정된다():
+    """PR 26 회귀 — 미보유 종목 BUY 가 "판정 불가"로 빠지면 안 된다."""
+    non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
+    assert non_holders  # 데이터가 바뀌어 전원 보유가 되면 이 테스트는 의미가 없어진다
+
+    for persona in non_holders:
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
+        chasing = {c["label"]: c for c in body["contributions"]}["추격매수"]
+        assert body["shouldIntervene"] is True, persona
+        assert "기준 종가" in chasing["detail"], persona
+        # 물타기는 보유가 없으면 성립하지 않는다 — 추격매수만 발동한 것이 맞는지
+        assert {c["label"]: c for c in body["contributions"]}["물타기"]["value"] == 0, persona
+
+
+# ── 주문 유니버스 ────────────────────────────────────────────────────────────
+
+
+def test_유니버스_페르소나():
+    """페르소나 유니버스는 DEMO_UNIVERSE 그대로 + 종가는 DEMO_AS_OF 이하여야 한다."""
+    r = client.get("/api/universe", params={"persona": "chasing_prone"})
+    assert r.status_code == 200, r.text
+    items = r.json()
+
+    assert {i["ticker"] for i in items} == set(service.DEMO_UNIVERSE)
+    for item in items:
+        assert set(item.keys()) == {"ticker", "name", "lastClose", "lastDate"}
+        assert item["name"] == service.DEMO_UNIVERSE[item["ticker"]]
+        # 커밋된 시세 캐시가 DEMO_AS_OF 를 덮으므로 여기서는 종가가 반드시 나온다
+        assert item["lastClose"] is not None and item["lastClose"] > 0
+        # 룩어헤드 금지 — 기준일 다음 날 종가를 폼 기본값으로 흘리면 안 된다
+        assert date.fromisoformat(item["lastDate"]) <= service.DEMO_AS_OF
+
+
+def test_유니버스_세션(csv_session):
+    """세션 유니버스는 그 사람이 실제 거래한 종목 + 종가는 마지막 체결일 이하."""
+    r = client.get("/api/universe", params={"session": csv_session})
+    assert r.status_code == 200, r.text
+    items = r.json()
+    assert items
+
+    trades = service._SESSIONS[csv_session]
+    assert {i["ticker"] for i in items} == {str(t) for t in trades["ticker"].dropna()}
+
+    as_of = max(trades["traded_at"].dropna())
+    for item in items:
+        if item["lastDate"] is None:
+            continue  # 캐시에 없는 종목은 시세 없이 null 로 나가는 게 정상이다
+        assert date.fromisoformat(item["lastDate"]) <= as_of
+
+
+def test_유니버스도_모르는_세션은_404():
+    assert client.get("/api/universe", params={"session": "없는세션"}).status_code == 404
+    assert client.get("/api/universe", params={"persona": "does_not_exist"}).status_code == 404
 
 
 def test_백테스트_엔드포인트():

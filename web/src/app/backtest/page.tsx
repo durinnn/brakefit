@@ -5,13 +5,7 @@ import SynthDisclaimer from "@/components/SynthDisclaimer";
 import { getBacktestResult } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
-import type { BiasKey } from "@/lib/types";
-
-const BIAS_LABEL: Record<BiasKey, string> = {
-  disposition: "처분효과",
-  averaging_down: "물타기",
-  chasing: "추격매수",
-};
+import { BIAS_LABEL } from "@/lib/bias";
 
 export default async function BacktestPage() {
   const session = await getServerSession();

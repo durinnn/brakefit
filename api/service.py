@@ -14,9 +14,11 @@ backtest)는 데이터 출처를 전혀 모른다 — docs/schema.md §1 이 유
 
 from __future__ import annotations
 
+import logging
 import re
 import tempfile
 from collections import OrderedDict
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -36,6 +38,7 @@ from api.schemas import (
     PersonaInfo,
     RiskContribution,
     SimulateOrderRequest,
+    UniverseItem,
     UploadSummary,
 )
 from core import schema
@@ -46,9 +49,16 @@ from core.metrics import averaging_down, chasing, disposition
 from core.parser import kb_hts
 from core.parser.reader import UnreadableExport
 from core.rules import engine as rules_engine
-from core.rules.base import INTERVENE_THRESHOLD, ProposedOrder
-from core.synth.generator import generate_trades
+from core.rules.base import (
+    INTERVENE_THRESHOLD,
+    ProposedOrder,
+    ReferenceClose,
+    reference_close,
+)
+from core.synth.generator import DEFAULT_UNIVERSE, generate_trades
 from core.synth.personas import NOT_REAL_USER_DISCLAIMER, PRESETS
+
+logger = logging.getLogger(__name__)
 
 METRIC_MODULES = (disposition, averaging_down, chasing)
 
@@ -415,6 +425,20 @@ def _grade(score: float) -> str:
 # ── percentile 기준선 ────────────────────────────────────────────────────────
 # ⚠ NOT_REAL_USER_DISCLAIMER — 프리셋 5종(n=5)짜리 기준이라 percentile 은 장식에
 # 가깝다. 실 사용자 데이터가 쌓이면 거기서 다시 만들 것.
+#
+# chasing 은 "5%+ 급등 중 보유 종목 추가매수"라는 희소 이벤트라, DEMO_UNIVERSE(3종목)
+# ·n_episodes=40 조합으로는 판정 가능한 표본이 seed 하나당 0~8건까지 떨어져서 점수가
+# 0~100 사이를 극단적으로 오간다(core/metrics/chasing.py 의 episode 스코핑 버그를
+# 고치고 나서 드러남). n_episodes 만 올려선 부족하다 — 종목 3개짜리 9개월 시세로는
+# episode 를 아무리 요청해도 10~12개에서 frontier 가 막혀 포화한다(각 종목의 남은
+# 시세 구간을 다 써버림). 기준선 계산에서만 8종목(core/synth/generator.DEFAULT_UNIVERSE,
+# data/cache/prices/ 에 전부 캐시돼 있어 네트워크 불필요)으로 넓혀서 포화 지점을
+# 17~38 episode 로 올린다. PRESETS·DEMO_UNIVERSE 자체(데모 대시보드가 쓰는 단일
+# 페르소나 응답)는 응답속도 때문에 그대로 둔다 — 이 함수는 서버 기동 시 한 번
+# 프리워밍되고 이후 캐시된 값을 쓴다.
+_REFERENCE_UNIVERSE = DEFAULT_UNIVERSE
+_REFERENCE_N_EPISODES = 300  # frontier 포화 지점(17~38)보다 훨씬 크게 잡아 항상 포화되게 함
+
 _reference_cache: dict[str, list[float]] | None = None
 
 
@@ -425,7 +449,8 @@ def _reference_scores() -> dict[str, list[float]]:
 
     scores: dict[str, list[float]] = {"disposition_effect": [], "averaging_down": [], "chasing": []}
     for persona in PRESETS.values():
-        trades = generate_trades(persona, tickers=DEMO_UNIVERSE, end=DEMO_AS_OF)
+        ref_persona = replace(persona, n_episodes=_REFERENCE_N_EPISODES)
+        trades = generate_trades(ref_persona, tickers=_REFERENCE_UNIVERSE, end=DEMO_AS_OF)
         result = build_engine(trades, as_of=DEMO_AS_OF)
         for mod in METRIC_MODULES:
             r = mod.compute(result.timeline, trades, result.episodes)
@@ -440,6 +465,49 @@ def _percentile(key: str, score: float) -> float:
         return 50.0
     below_or_equal = sum(1 for s in ref if s <= score)
     return round(below_or_equal / len(ref) * 100, 1)
+
+
+# ── ⓪ 주문 유니버스 ─────────────────────────────────────────────────────────
+
+
+def _reference_close(ticker: str, as_of: date) -> ReferenceClose | None:
+    """주문 폼의 기본값·표시용 등락률이 공유하는 기준 종가. 못 구하면 사유를 로그로.
+
+    ⚠ 룰(core/rules/base.reference_close)과 **같은 함수**를 쓴다. 예전에는 유니버스만
+    as_of 당일을 포함하고 룰은 뺐는데, 그래서 주문 폼에 뜬 기준 종가(268,500 · 08-18)
+    와 판정 결과의 changeRate 기준(274,500 · 08-14)이 서로 다른 날을 가리켰다.
+
+    예외를 502 로 승격시키지 않고 None 으로 삼키는 게 여기서는 맞다. 이 값은 표시용
+    (주문 폼 기본값·등락률)이라, 시세 한 종목을 못 구했다고 종목 목록 전체를 못 주는
+    게 더 나쁘다. 사유를 잃지 않도록 로그에는 남긴다.
+    """
+    ref, warning = reference_close(ticker, as_of)
+    if warning:
+        logger.warning("기준 종가 없이 진행: %s", warning)
+    return ref
+
+
+def universe(persona_key: str, *, session_id: str | None = None) -> list[UniverseItem]:
+    """모의 주문 폼이 고를 수 있는 종목 목록.
+
+    페르소나면 DEMO_UNIVERSE, 업로드 세션이면 그 사람이 실제로 거래한 종목이다
+    (_resolve_trades 가 이미 갈라준다). 거래한 적 없는 종목은 timeline 이 없어서
+    브레이크 룰이 전부 skip 되므로 — 판정할 수 없는 종목을 고를 수 있게 두면
+    "브레이크가 안 걸리네" 로 오해하게 된다.
+    """
+    _trades, as_of, tickers = _resolve_trades(persona_key, session_id)
+    items: list[UniverseItem] = []
+    for ticker, name in tickers.items():
+        ref = _reference_close(ticker, as_of)
+        items.append(
+            UniverseItem(
+                ticker=ticker,
+                name=name,
+                last_close=round(ref.close, 2) if ref else None,
+                last_date=ref.date.isoformat() if ref else None,
+            )
+        )
+    return items
 
 
 # ── ① 진단 ───────────────────────────────────────────────────────────────────
@@ -505,7 +573,13 @@ def simulate_order(
         quantity=order_req.quantity,
         price=order_req.price,
     )
-    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes)
+    # as_of 를 같이 넘긴다 — 룰이 "지금 보유 중인가 / 기준 종가를 어디까지 볼지"를 정할 때
+    # 기준 시점이 필요하다(core/rules/chasing_rule.py 모듈 docstring).
+    report = rules_engine.evaluate(order, metric_results, result.timeline, result.episodes, as_of)
+    for w in report.warnings:
+        # 룰이 판정을 못 한 사유(시세 조회 실패 등). 응답 스키마에는 아직 자리가 없어
+        # 로그로만 남긴다 — 그래도 삼키지는 않는다(AGENTS.md).
+        logger.warning("판정 경고 [%s %s]: %s", order.ticker, order.side, w)
 
     contributions = [
         RiskContribution(
@@ -516,28 +590,26 @@ def simulate_order(
         for c in report.contributions
     ]
 
-    dominant = max(report.contributions, key=lambda c: c.score)
+    # 지배 편향은 "발동한 룰 중 기여 최대" — 개입 조건이 triggered 기준이라(core/rules/engine.py)
+    # 과거 점수만 높고 이번 주문에선 발동하지 않은 룰이 팝업 문구를 가져가면 안 된다.
+    # 아무 룰도 발동 안 한 경우에만 기존대로 전체 중 최대를 쓴다(전부 0점이면 워터폴 첫 룰).
+    triggered = [c for c in report.contributions if c.triggered]
+    dominant = max(triggered or report.contributions, key=lambda c: c.score)
     dominant_metric = next((m for m in metric_results if m.key == dominant.key), None)
 
     if report.should_intervene and dominant.evidence:
         # 워터폴 순서(chasing → averaging_down → disposition)를 그대로 우선순위로 넘긴다 —
         # guard.get_order_fallback() 이 triggered_keys[0] 을 최우선 룰로 취급한다.
-        triggered_keys = [c.key for c in report.contributions if c.triggered]
+        triggered_keys = [c.key for c in triggered]
         coaching = generate_coaching(
             context="order_intervention",
             evidence=dominant.evidence,
             triggered_keys=triggered_keys,
         )
         headline, description = coaching.headline, coaching.body
-    elif dominant.triggered:
-        # 개별 룰은 트리거됐지만 합산 위험점수가 개입 기준(INTERVENE_THRESHOLD) 미만 —
-        # case_count 는 그대로 실제 이력 건수를 보여주므로 headline 이 "이력 없음"이라고
-        # 모순되게 말하지 않도록 분리해둔다.
-        headline = f"{BIAS_KEY_LABEL[dominant.key]} 이력이 있지만 위험 수준은 아님"
-        description = (
-            "과거에 비슷한 패턴이 있었지만, 이번 주문의 종합 위험점수는 개입 기준에 못 미칩니다."
-        )
     else:
+        # 발동한 룰이 하나라도 있으면 should_intervene 이 True 이므로 여기는 "아무것도
+        # 발동 안 함" 뿐이다 — 예전의 "발동은 했는데 점수가 임계 미만" 상태는 사라졌다.
         headline = "과거 패턴 이력 없음"
         description = "이번 주문은 과거 편향 패턴과 뚜렷이 겹치지 않습니다."
 
@@ -556,12 +628,14 @@ def simulate_order(
     else:
         risk_level = "HIGH"
 
-    change_rate = 0.0
-    holding = result.timeline[result.timeline["ticker"] == order.ticker]
-    if not holding.empty:
-        prev_close = holding.sort_values("date").iloc[-1]["close"]
-        if prev_close:
-            change_rate = round((order.price - prev_close) / prev_close * 100, 2)
+    # 표시용 등락률도 룰이 판정에 쓴 것과 **같은 종가**를 기준으로 한다. 예전에는
+    # timeline 마지막 행의 close 를 썼는데(= 보유 기간에만 존재 + 청산된 옛 에피소드면
+    # stale), 화면의 "기준 종가 대비 %"와 추격매수 룰의 급등률이 서로 다른 숫자를
+    # 가리켰다. 미보유 종목은 아예 0.0% 로 나갔고.
+    # /api/universe 의 lastClose 와도 같은 헬퍼다 — 폼에 뜬 종가와 팝업의 기준이 갈리면
+    # 사용자에겐 그냥 틀린 숫자로 보인다.
+    ref = _reference_close(order.ticker, as_of)
+    change_rate = round((order.price - ref.close) / ref.close * 100, 2) if ref else 0.0
 
     return InterventionReport(
         order=PendingOrder(
@@ -574,9 +648,13 @@ def simulate_order(
         ),
         risk_score=risk_score,
         risk_level=risk_level,
+        should_intervene=report.should_intervene,
         base_score=0.0,
         contributions=contributions,
         warning=warning,
+        # 지배 편향을 프론트가 contributions 의 value 최댓값으로 되짚지 않게 그대로 싣는다.
+        # label 문자열로 룰을 역추적하는 코드는 라벨을 바꾸는 순간 조용히 틀린다.
+        dominant_key=BIAS_KEY_TO_FRONTEND[dominant.key] if report.should_intervene else None,
         suggestions=_suggestions(
             report.should_intervene, dominant.key if report.should_intervene else None
         ),
@@ -654,4 +732,5 @@ __all__ = [
     "ingest_upload",
     "list_personas",
     "simulate_order",
+    "universe",
 ]

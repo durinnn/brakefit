@@ -20,6 +20,8 @@ import type {
   BacktestResult,
   DiagnosisReport,
   InterventionReport,
+  OrderInput,
+  UniverseItem,
   UploadResult,
 } from "./types";
 
@@ -127,9 +129,17 @@ export function getDiagnosisReport(
 /* 2. 모의 주문창 개입 (/trade)                                                */
 /* -------------------------------------------------------------------------- */
 
-/** 데모용 고정 주문 — 캐시된 실제 종가(2026-08-18, 268,500원) 대비 +8% 로 잡아서
- *  추격매수 룰이 안정적으로 트리거되게 함. */
-const DEMO_ORDER = {
+/** 데모용 프리필 주문 — 캐시된 실제 종가(2026-08-18, 268,500원) 대비 +8% 로 잡아서
+ *  추격매수 룰이 안정적으로 트리거되게 함.
+ *
+ *  이제는 고정 호출이 아니라 **주문 폼의 초기값**이다(페르소나 모드일 때만). 심사
+ *  시연에서 버튼 한 번에 개입 팝업까지 도달하려면 확실히 트리거되는 값이 필요한데,
+ *  값을 지어내면 안 되므로 캐시된 실제 종가에서 계산한 이 조합을 유지한다.
+ *
+ *  개입 조건이 "룰 하나라도 발동" 으로 바뀐 뒤(core/rules/engine.py) 이 프리필은
+ *  페르소나 5종 전부에서 추격매수 발동 → 팝업까지 도달하는 것을 확인했다
+ *  (위험점수 12.31~29.57 로 낮게 뜨는 건 정상 — 점수는 과거 지표 강도라서). */
+export const DEMO_ORDER: OrderInput = {
   ticker: "005930",
   name: "삼성전자",
   side: "BUY",
@@ -137,17 +147,30 @@ const DEMO_ORDER = {
   price: 290_000,
 };
 
-export function getInterventionReport(
+/** 주문 폼이 고를 수 있는 종목 목록. 판정 대상이 되는 종목만 온다. */
+export function getUniverse(
+  session?: string | null,
+): Promise<ApiResult<UniverseItem[]>> {
+  return fetchWithFallback<UniverseItem[]>(
+    "/api/universe",
+    session,
+    "종목 목록 조회 실패",
+  );
+}
+
+/** 사용자가 입력한 주문 하나를 판정한다. 브라우저에서 호출한다(폼 제출 시점). */
+export function simulateOrder(
+  order: OrderInput,
   session?: string | null,
 ): Promise<ApiResult<InterventionReport>> {
   return fetchWithFallback<InterventionReport>(
     "/api/simulate-order",
     session,
-    "개입 리포트 조회 실패",
+    "주문 판정 실패",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(DEMO_ORDER),
+      body: JSON.stringify(order),
     },
   );
 }

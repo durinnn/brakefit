@@ -85,9 +85,19 @@ class InterventionReport(CamelModel):
     order: PendingOrder
     risk_score: float = Field(serialization_alias="riskScore")
     risk_level: str = Field(serialization_alias="riskLevel")  # LOW|MEDIUM|HIGH
+    #: 개입 팝업을 띄울지 말지의 **판정 결과 그 자체**(core/rules 의 should_intervene).
+    #: 프론트가 riskLevel == "HIGH" 로 재유도하지 않게 그대로 실어보낸다 — 지금은
+    #: RISK_LEVEL_THRESHOLDS[1] == INTERVENE_THRESHOLD 라 둘이 우연히 같지만, 룰 쪽
+    #: 임계값이 바뀌는 순간 프론트만 조용히 틀리게 된다.
+    should_intervene: bool = Field(serialization_alias="shouldIntervene")
     base_score: float = Field(serialization_alias="baseScore")
     contributions: list[RiskContribution]
     warning: PatternWarning
+    #: 이번 판정을 주도한 편향(BiasKey). 개입이 아니면 None.
+    #: 프론트가 contributions 의 value 최댓값이나 label 문자열로 되짚지 않게 하려고
+    #: 서버가 정해서 내려준다 — 지배 편향 규칙("발동한 룰 중 기여 최대")은 core/rules
+    #: 의 개입 조건과 붙어 있어서, 라벨만 보는 클라이언트는 규칙이 바뀔 때 조용히 틀린다.
+    dominant_key: str | None = Field(default=None, serialization_alias="dominantKey")
     suggestions: list[str]
 
 
@@ -132,9 +142,25 @@ class UploadSummary(CamelModel):
     source: str  # "kb_export" | "standard_csv"
 
 
+class UniverseItem(CamelModel):
+    """GET /api/universe 의 한 종목 — 모의 주문 폼의 종목 select 재료.
+
+    lastClose/lastDate 는 폼 기본값(예상 체결가) 용도다. **as_of 이하의 종가만** 담는다 —
+    이후 시세를 프리필하면 사용자가 미래를 보고 주문가를 정하게 되어 룩어헤드가 된다
+    (AGENTS.md 절대규칙 1). 시세를 못 구하면 거짓값을 만들지 않고 null 로 둔다.
+    """
+
+    ticker: str
+    name: str
+    last_close: float | None = Field(default=None, serialization_alias="lastClose")
+    last_date: str | None = Field(default=None, serialization_alias="lastDate")
+
+
 class SimulateOrderRequest(BaseModel):
     ticker: str
     name: str
+    #: "BUY" | "SELL". SELL 도 정상 입력이다 — core/rules/disposition_rule 이 매도를
+    #: 판정한다(다만 처분효과 룰 단독 최대 기여가 25점이라 개입 임계 50 에는 못 미친다).
     side: str
     quantity: int
     price: float

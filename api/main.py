@@ -31,6 +31,7 @@ from api.schemas import (
     InterventionReport,
     PersonaInfo,
     SimulateOrderRequest,
+    UniverseItem,
     UploadSummary,
 )
 from core.synth.personas import PRESETS
@@ -127,6 +128,18 @@ async def post_upload(file: Annotated[UploadFile, File()]) -> UploadSummary:
 def get_diagnosis(persona: str = "mixed_realistic", session: str | None = None) -> DiagnosisReport:
     _validate_source(persona, session)
     return service.diagnose(persona, session_id=session)
+
+
+@app.get("/api/universe", response_model=list[UniverseItem], response_model_by_alias=True)
+def get_universe(
+    persona: str = "mixed_realistic", session: str | None = None
+) -> list[UniverseItem]:
+    """모의 주문 폼(/trade)의 종목 select 재료 — 이 데이터 소스로 판정 가능한 종목만.
+
+    lastClose 는 as_of 이하의 마지막 종가라 폼 기본가로 그대로 써도 룩어헤드가 아니다.
+    """
+    _validate_source(persona, session)
+    return service.universe(persona, session_id=session)
 
 
 @app.post("/api/simulate-order", response_model=InterventionReport, response_model_by_alias=True)
