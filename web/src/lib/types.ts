@@ -57,7 +57,7 @@ export interface PendingOrder {
   side: "BUY" | "SELL";
   quantity: number;
   price: number;
-  /** 직전 종가 대비 등락률 (%) */
+  /** 기준 종가(as_of 이하 마지막 종가) 대비 등락률 (%) */
   changeRate: number;
 }
 
