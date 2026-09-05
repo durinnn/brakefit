@@ -55,7 +55,7 @@ from core.rules.base import (
     ReferenceClose,
     reference_close,
 )
-from core.synth.generator import DEFAULT_UNIVERSE, generate_trades
+from core.synth.generator import generate_trades
 from core.synth.personas import NOT_REAL_USER_DISCLAIMER, PRESETS
 
 logger = logging.getLogger(__name__)
@@ -423,21 +423,26 @@ def _grade(score: float) -> str:
 
 
 # ── percentile 기준선 ────────────────────────────────────────────────────────
-# ⚠ NOT_REAL_USER_DISCLAIMER — 프리셋 5종(n=5)짜리 기준이라 percentile 은 장식에
-# 가깝다. 실 사용자 데이터가 쌓이면 거기서 다시 만들 것.
+# ⚠ NOT_REAL_USER_DISCLAIMER — 합성 페르소나로 만든 기준이라 percentile 은 참고용이다.
+# 실 사용자 데이터가 쌓이면 거기서 다시 만들 것.
 #
-# chasing 은 "5%+ 급등 중 보유 종목 추가매수"라는 희소 이벤트라, DEMO_UNIVERSE(3종목)
-# ·n_episodes=40 조합으로는 판정 가능한 표본이 seed 하나당 0~8건까지 떨어져서 점수가
-# 0~100 사이를 극단적으로 오간다(core/metrics/chasing.py 의 episode 스코핑 버그를
-# 고치고 나서 드러남). n_episodes 만 올려선 부족하다 — 종목 3개짜리 9개월 시세로는
-# episode 를 아무리 요청해도 10~12개에서 frontier 가 막혀 포화한다(각 종목의 남은
-# 시세 구간을 다 써버림). 기준선 계산에서만 8종목(core/synth/generator.DEFAULT_UNIVERSE,
-# data/cache/prices/ 에 전부 캐시돼 있어 네트워크 불필요)으로 넓혀서 포화 지점을
-# 17~38 episode 로 올린다. PRESETS·DEMO_UNIVERSE 자체(데모 대시보드가 쓰는 단일
-# 페르소나 응답)는 응답속도 때문에 그대로 둔다 — 이 함수는 서버 기동 시 한 번
-# 프리워밍되고 이후 캐시된 값을 쓴다.
-_REFERENCE_UNIVERSE = DEFAULT_UNIVERSE
-_REFERENCE_N_EPISODES = 300  # frontier 포화 지점(17~38)보다 훨씬 크게 잡아 항상 포화되게 함
+# **기준선은 피측정치와 똑같은 생성 조건으로 만든다** — 유니버스도 n_episodes 도
+# _persona_trades() 와 같다. 이전 버전은 기준선만 8종목(DEFAULT_UNIVERSE)·300
+# episode 로 넓혔는데, 그러면 백분위를 매기는 대상(DEMO_UNIVERSE 3종목·40 episode)과
+# 모집단이 달라져서 서로 다른 분포를 비교하게 된다. chasing 점수가 종목 수·에피소드
+# 수에 체계적으로 반응하는 탓에 기준선이 통째로 낮게 깔렸고, 그 결과 대조군
+# rational_baseline(16.67점)이 "상위 80%" 로 표시됐다 — 분산이 아니라 정의의 문제라
+# 표본을 넓히는 걸로는 안 풀린다.
+#
+# 분산은 대신 **seed 를 여러 개 돌려 표본 수로** 잡는다. 페르소나 5종 × seed 4개 = 20
+# 표본(백분위는 5% 단위). 오프셋은 고정 목록이라 결과가 결정론적이고, 오프셋 0 은
+# 데모가 실제로 보여주는 그 거래내역이라 피측정치가 항상 기준선 안에 들어간다.
+# seed 개수가 4개인 건 프리워밍 예산(3초) 때문이다 — 로컬 측정으로 4개 2.4~2.6s,
+# 5개 2.9~3.5s, 6개 3.5~5.0s 였고(비용의 대부분은 metrics 계산), 세 경우 모두
+# 페르소나 간 백분위 순위는 같았다. 예산이 늘면 오프셋만 추가하면 된다.
+#
+# 이 함수는 서버 기동 시 한 번 프리워밍되고 이후 캐시된 값을 쓴다.
+_REFERENCE_SEED_OFFSETS = (0, 10, 20, 30)
 
 _reference_cache: dict[str, list[float]] | None = None
 
@@ -449,17 +454,25 @@ def _reference_scores() -> dict[str, list[float]]:
 
     scores: dict[str, list[float]] = {"disposition_effect": [], "averaging_down": [], "chasing": []}
     for persona in PRESETS.values():
-        ref_persona = replace(persona, n_episodes=_REFERENCE_N_EPISODES)
-        trades = generate_trades(ref_persona, tickers=_REFERENCE_UNIVERSE, end=DEMO_AS_OF)
-        result = build_engine(trades, as_of=DEMO_AS_OF)
-        for mod in METRIC_MODULES:
-            r = mod.compute(result.timeline, trades, result.episodes)
-            scores[r.key].append(r.score_0_100)
+        for offset in _REFERENCE_SEED_OFFSETS:
+            # n_episodes·유니버스는 건드리지 않는다 — 바꾸는 순간 모집단이 갈린다(위 주석).
+            ref_persona = replace(persona, seed=persona.seed + offset)
+            trades = generate_trades(ref_persona, tickers=DEMO_UNIVERSE, end=DEMO_AS_OF)
+            result = build_engine(trades, as_of=DEMO_AS_OF)
+            for mod in METRIC_MODULES:
+                r = mod.compute(result.timeline, trades, result.episodes)
+                scores[r.key].append(r.score_0_100)
     _reference_cache = scores
     return scores
 
 
 def _percentile(key: str, score: float) -> float:
+    """기준선 표본 중 이 점수 **이하**인 비율(%). 점수가 높을수록(=편향이 심할수록) 커진다.
+
+    ⚠ 프론트(web/src/components/BiasMetricCard.tsx)는 이 값을 "상위 N%" 로 찍는데,
+    한국어 "상위 1%" 는 보통 극단(=제일 심한 쪽)을 뜻하므로 방향이 반대로 읽힌다.
+    표기·환산은 web 오너(D) 결정 사항이라 여기서는 값의 정의만 명시해둔다.
+    """
     ref = _reference_scores().get(key, [])
     if not ref:
         return 50.0

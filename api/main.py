@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """기동 시 percentile 기준선을 미리 계산해둔다.
 
-    _reference_scores() 는 페르소나 5종을 전부 생성해서 engine·metrics 를 돌리므로
-    첫 호출이 무겁다. Render 무료 플랜은 유휴 시 슬립 → 콜드스타트라, 안 데워두면
-    시연 중 첫 /api/diagnose 가 그 비용을 그대로 뒤집어쓴다.
+    _reference_scores() 는 페르소나 5종 × seed 4개 = 20벌을 생성해서 engine·metrics 를
+    돌리므로 첫 호출이 무겁다(로컬 측정 2.4~2.6초). Render 무료 플랜은 유휴 시 슬립 →
+    콜드스타트라, 안 데워두면 시연 중 첫 /api/diagnose 가 그 비용을 그대로 뒤집어쓴다.
 
     실패해도 서버는 떠야 한다(기준선은 percentile 장식용이고, 실패해도 _percentile()
     이 50.0 폴백을 준다). 대신 사유 없이 삼키지는 않는다 — logging.exception 으로
