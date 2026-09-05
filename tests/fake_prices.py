@@ -16,15 +16,17 @@ class FakePriceSource:
     """{ticker: {날짜: 종가}} 로 만든 가짜 시세.
 
     calls 에 (ticker, start, end) 요청 이력을 남긴다.
-    forbid_from 을 주면 그 날짜 **이상**을 요청하는 순간 AssertionError 로 터진다 —
-    "as_of 당일·이후 종가는 애초에 요청조차 하면 안 된다" 를 강제하는 장치다.
+    forbid_after 를 주면 그 날짜를 **초과**해 요청하는 순간 AssertionError 로 터진다 —
+    "as_of 다음 날부터의 종가는 애초에 요청조차 하면 안 된다" 를 강제하는 장치다.
+    (as_of 당일은 허용이다: 판정 시점이 as_of 보다 뒤라 그날 종가는 이미 공시됐다 —
+    core/rules/base.reference_close docstring 참조.)
     """
 
     def __init__(
         self,
         closes: dict[str, dict[str, float]],
         *,
-        forbid_from: date | None = None,
+        forbid_after: date | None = None,
     ) -> None:
         self.series = {
             ticker: pd.Series(
@@ -34,14 +36,14 @@ class FakePriceSource:
             ).sort_index()
             for ticker, by_date in closes.items()
         }
-        self.forbid_from = forbid_from
+        self.forbid_after = forbid_after
         self.calls: list[tuple[str, date, date]] = []
 
     def __call__(self, ticker: str, start: date, end: date) -> pd.Series:
         self.calls.append((ticker, start, end))
-        if self.forbid_from is not None:
-            assert end < self.forbid_from, (
-                f"룩어헤드: {ticker} 시세를 {end} 까지 요청했다 (허용 상한 {self.forbid_from} 미만)"
+        if self.forbid_after is not None:
+            assert end <= self.forbid_after, (
+                f"룩어헤드: {ticker} 시세를 {end} 까지 요청했다 (허용 상한 {self.forbid_after})"
             )
         series = self.series.get(ticker)
         if series is None:

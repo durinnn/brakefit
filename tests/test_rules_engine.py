@@ -2,7 +2,7 @@
 
 시나리오 (as_of = 2026-08-04 화): docs/sequences.md ② 예시에 가까운 시나리오
     삼성전자: 10주 보유 중 · 평단 70,000원
-    가짜 시세: 08-03(as_of 직전 영업일) 종가 66,000원 / 08-04 종가 90,000원(쓰면 안 됨)
+    가짜 시세: 08-04(as_of 당일 = 기준 종가) 66,000원 / 08-03 종가 90,000원(쓰면 뒤집힘)
     → 평가손익 = (66,000 − 70,000) × 10 = −40,000원 (평가손실)
 
     과거 지표 점수:
@@ -89,9 +89,10 @@ ORDER_CHASING_AND_AVG = ProposedOrder(
 )
 
 
-def _prices(close_0803: float = 66_000, **kwargs) -> FakePriceSource:
+def _prices(close_0804: float = 66_000, **kwargs) -> FakePriceSource:
+    # 08-03 은 일부러 기준 종가와 멀리 떨어뜨렸다 — 하루 어긋나게 잡으면 판정이 뒤집힌다
     return FakePriceSource(
-        {"005930": {"2026-07-31": 64_000, "2026-08-03": close_0803, "2026-08-04": 90_000}},
+        {"005930": {"2026-07-31": 64_000, "2026-08-03": 90_000, "2026-08-04": close_0804}},
         **kwargs,
     )
 
@@ -164,11 +165,11 @@ def test_single_rule_triggered_intervenes_below_threshold():
     SELL + 평가이익 → 처분효과만 발동. 상한이 25 라 점수로는 절대 50 을 못 넘는데,
     예전 판정(점수 임계)에서는 이 때문에 매도 주문에 개입이 구조적으로 불가능했다.
 
-    직전 종가 75,000원 · 평단 70,000원 · 10주 → 평가이익 +50,000원.
+    기준 종가 75,000원 · 평단 70,000원 · 10주 → 평가이익 +50,000원.
     """
     order = ProposedOrder(ticker="005930", name="삼성전자", side="SELL", quantity=5, price=75_000)
 
-    report = _evaluate(order, prices=_prices(close_0803=75_000))
+    report = _evaluate(order, prices=_prices(close_0804=75_000))
 
     triggered = [c for c in report.contributions if c.triggered]
     assert [c.key for c in triggered] == ["disposition_effect"]
@@ -195,13 +196,16 @@ def test_no_rule_triggered_does_not_intervene():
 # ── 기준 종가 출처 = 시세 캐시 (as_of 컷) ────────────────────────────────────
 
 
-def test_기준_종가는_as_of_당일을_쓰지_않는다():
-    """08-04 종가(90,000)를 썼다면 69,300 매수는 −23% 라 추격매수가 미발동한다."""
-    prices = _prices(forbid_from=AS_OF)
+def test_기준_종가는_as_of_당일까지만_본다():
+    """08-03 종가(90,000)를 썼다면 69,300 매수는 −23% 라 추격매수가 미발동한다.
+
+    반대쪽 경계도 같이 본다 — as_of 다음 날 종가를 요청하면 fake 가 그 자리에서 터진다.
+    """
+    prices = _prices(forbid_after=AS_OF)
     report = _evaluate(ORDER_CHASING_AND_AVG, prices=prices)
 
     assert {c.key: c.triggered for c in report.contributions}["chasing"] is True
-    assert all(end < AS_OF for _, _, end in prices.calls)
+    assert all(end == AS_OF for _, _, end in prices.calls)
 
 
 def test_룰의_미판정_사유가_보고서로_올라온다():

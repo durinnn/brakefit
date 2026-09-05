@@ -143,11 +143,12 @@ def run(
         # as_of 는 판정 시점(cutoff = 매수 하루 전) 그대로. 룰은 이걸로 (1) 그 시점에
         # 보유 중이었는지, (2) 기준 종가를 어디까지 볼지를 정한다.
         #
-        # ⚠ 시세 조회도 이 컷을 그대로 따른다: 룰이 쓰는 기준 종가는 as_of **직전**
-        # 영업일 종가라(core/rules/base.previous_close), 여기서는 cutoff 직전 =
-        # 매수일 이틀 전까지만 본다. 매수일 당일은 물론 매수 전날 종가도 안 쓰는
-        # 셈이라 실제보다 보수적이지만, 틀리는 방향이 "미판정"이라 안전하다 —
-        # 룩어헤드는 그 반대 방향이라 절대 허용되지 않는다(AGENTS.md 절대규칙 1).
+        # ⚠ 시세 조회도 이 컷을 그대로 따른다: 룰이 쓰는 기준 종가는 as_of **이하**
+        # 마지막 영업일 종가라(core/rules/base.reference_close), 여기서는 cutoff
+        # 당일 = 매수 전날까지만 본다. 매수 전날 종가는 매수 시점에 이미 나와 있는
+        # 값이라 룩어헤드가 아니고(장 마감 후 공시), 이 컷이 core/metrics/chasing 의
+        # T−1 기준과도 같은 날을 가리킨다. 매수일 당일 종가는 여전히 조회 구간
+        # 밖이다 — 그쪽이 룩어헤드다(AGENTS.md 절대규칙 1).
         report = rules_engine.evaluate(
             order, metric_results, prior_timeline, prior_episodes, cutoff, price_source
         )

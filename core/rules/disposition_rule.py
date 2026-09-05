@@ -13,8 +13,8 @@
    그중 셋은 DEMO_AS_OF 에 삼성전자를 보유하고 있지도 않았다. 안 들고 있는 종목은
    팔 수도 없으므로 처분효과의 대상이 아니다 — 미판정으로 뺀다.
 
-⚠ 평가손익은 **as_of 직전 종가 − 평단** 으로 다시 계산한다(시세 캐시 =
-   core/rules/base.previous_close). timeline.unrealized_pnl 은 그 행 날짜의 종가
+⚠ 평가손익은 **as_of 이하 마지막 종가 − 평단** 으로 다시 계산한다(시세 캐시 =
+   core/rules/base.reference_close). timeline.unrealized_pnl 은 그 행 날짜의 종가
    기준이라, 열린 에피소드로 스코핑해도 "마지막 행 날짜 == as_of" 가 보장되지 않으면
    기준일이 어긋난다(거래정지·캘린더 결측). 종가 출처를 추격매수 룰과 한 곳으로
    맞춰두면 두 룰이 같은 날 같은 가격을 본다.
@@ -32,7 +32,7 @@ from core.rules.base import (
     ProposedOrder,
     RuleContribution,
     open_episode_ids,
-    previous_close,
+    reference_close,
 )
 
 MAX_CONTRIBUTION = 25.0
@@ -79,7 +79,7 @@ def evaluate(
     quantity = float(latest["quantity"])
     avg_cost = float(latest["avg_cost"])
 
-    ref, price_warning = previous_close(order.ticker, as_of, price_source)
+    ref, price_warning = reference_close(order.ticker, as_of, price_source)
     warnings: list[str] = []
     if ref is not None:
         unrealized = (ref.close - avg_cost) * quantity

@@ -173,11 +173,13 @@ DEMO_PREFILL_ORDER = {
     "price": 290000,
 }
 
-#: DEMO_AS_OF(2026-08-18) **직전** 영업일 종가. 08-17 은 광복절 대체휴일이라 휴장이고,
-#: 08-18 당일 종가(268,500원)는 주문 시점에 알 수 없으므로 기준이 될 수 없다.
-#: 손계산: 290,000 / 274,500 − 1 = +5.65% ≥ SURGE_THRESHOLD(5%) → 추격매수 발동.
-PREFILL_REFERENCE_CLOSE = 274_500
-PREFILL_CHANGE_RATE = 5.65
+#: DEMO_AS_OF(2026-08-18) **당일** 종가. as_of 는 마지막 거래일이고 모의 주문은 그
+#: 이후에 넣으므로, 08-18 종가는 주문 시점에 이미 공시된 값이다(하루 당겨서 08-14
+#: 종가 274,500원을 쓰면 /api/universe 의 lastClose 와 어긋난다 — 08-17 은 광복절
+#: 대체휴일이라 휴장).
+#: 손계산: 290,000 / 268,500 − 1 = +8.01% ≥ SURGE_THRESHOLD(5%) → 추격매수 발동.
+PREFILL_REFERENCE_CLOSE = 268_500
+PREFILL_CHANGE_RATE = 8.01
 
 
 def _holds_at_as_of(persona: str, ticker: str) -> bool:
@@ -197,7 +199,7 @@ def test_점수가_낮아도_룰이_발동하면_개입한다():
     50점에 못 닿는다 — 그래도 개입은 떠야 한다(개입 조건 = 룰 하나라도 triggered).
 
     ⚠ 예전에는 보유 중인 2종(rational_baseline·chasing_prone)만 떴다. 추격매수 룰의
-    직전 종가 출처가 timeline(=보유 기간에만 존재)이었기 때문이다. 이제 시세 캐시에서
+    기준 종가 출처가 timeline(=보유 기간에만 존재)이었기 때문이다. 이제 시세 캐시에서
     읽으므로 미보유 종목의 신규 진입 추격매수도 판정된다.
     """
     for persona in PRESETS:
@@ -210,11 +212,13 @@ def test_점수가_낮아도_룰이_발동하면_개입한다():
         assert body["dominantKey"] == "chasing", persona
 
 
-def test_프리필_주문의_등락률은_as_of_직전_종가_기준이다():
-    """표시용 changeRate 와 추격매수 룰이 같은 종가를 본다.
+def test_프리필_주문의_등락률은_as_of_당일_종가_기준이다():
+    """표시용 changeRate · 추격매수 룰 · /api/universe 가 **같은 종가**를 본다.
 
     예전에는 changeRate 를 timeline 마지막 행의 close 로 계산해서, 미보유 종목이면
-    0.0% 로 나가고 보유 중이어도 룰이 쓴 종가와 다른 값을 가리켰다.
+    0.0% 로 나가고 보유 중이어도 룰이 쓴 종가와 다른 값을 가리켰다. 그 다음엔 룰만
+    as_of 당일을 빼서(274,500 · 08-14) 주문 폼의 기준 종가(268,500 · 08-18)와 하루
+    어긋났다 — 지금은 core/rules/base.reference_close 하나로 통일돼 있다.
     """
     for persona in PRESETS:
         body = client.post(
@@ -223,6 +227,13 @@ def test_프리필_주문의_등락률은_as_of_직전_종가_기준이다():
         assert body["order"]["changeRate"] == pytest.approx(PREFILL_CHANGE_RATE, abs=0.01), persona
         detail = {c["label"]: c for c in body["contributions"]}["추격매수"]["detail"]
         assert f"{PREFILL_REFERENCE_CLOSE:,}" in detail, persona
+
+    # 주문 폼 기본값(/api/universe)도 같은 종가여야 한다 — 화면 두 곳이 다른 숫자를
+    # 보여주면 사용자에겐 그냥 틀린 값이다
+    items = client.get("/api/universe", params={"persona": "chasing_prone"}).json()
+    samsung = next(i for i in items if i["ticker"] == "005930")
+    assert samsung["lastClose"] == pytest.approx(PREFILL_REFERENCE_CLOSE)
+    assert samsung["lastDate"] == service.DEMO_AS_OF.isoformat()
 
 
 def test_미보유_종목_신규진입_추격매수도_판정된다():
@@ -236,7 +247,7 @@ def test_미보유_종목_신규진입_추격매수도_판정된다():
         ).json()
         chasing = {c["label"]: c for c in body["contributions"]}["추격매수"]
         assert body["shouldIntervene"] is True, persona
-        assert "직전 종가" in chasing["detail"], persona
+        assert "기준 종가" in chasing["detail"], persona
         # 물타기는 보유가 없으면 성립하지 않는다 — 추격매수만 발동한 것이 맞는지
         assert {c["label"]: c for c in body["contributions"]}["물타기"]["value"] == 0, persona
 

@@ -1,11 +1,11 @@
 """추격매수 브레이크 룰.
 
-발동 조건: BUY 주문인데 해당 종목의 **직전 종가** 대비 +5% 이상 급등한 가격으로 매수.
+발동 조건: BUY 주문인데 해당 종목의 **기준 종가** 대비 +5% 이상 급등한 가격으로 매수.
 
 기여 점수 = MAX_CONTRIBUTION(40) × (과거 추격매수 score_0_100 / 100)
 
-── "직전 종가"를 어디서 읽나 ────────────────────────────────────────────────
-timeline 이 아니라 **시세 캐시**(core/rules/base.previous_close → docs/schema.md §5
+── "기준 종가"를 어디서 읽나 ────────────────────────────────────────────────
+timeline 이 아니라 **시세 캐시**(core/rules/base.reference_close → docs/schema.md §5
 core/synth/prices.get_daily_close)에서 읽는다.
 
 timeline 을 쓰던 시절의 두 가지 문제를 한꺼번에 없앤다.
@@ -17,11 +17,14 @@ timeline 을 쓰던 시절의 두 가지 문제를 한꺼번에 없앤다.
      안에서만" 이라는 조건을 걸었더니 1번이 더 나빠졌다.
 
 시세 캐시에는 as_of 와 무관하게 그 종목의 모든 영업일 종가가 있으므로, 보유 여부와
-무관하게 판정할 수 있고 stale 도 구조적으로 불가능하다(항상 as_of 직전 영업일).
+무관하게 판정할 수 있고 stale 도 구조적으로 불가능하다(항상 as_of 이하 마지막 영업일).
 
-⚠ 룩어헤드 금지(AGENTS.md 절대규칙 1): 기준 종가는 **as_of 당일을 제외한** 마지막
-   영업일 종가다. 캐시 파일에는 as_of 이후 종가도 들어있어서(장 마감 후 채운 파일)
-   경계를 안 걸면 조용히 미래를 본다. 경계는 previous_close() 한 곳에만 있다.
+⚠ 룩어헤드 금지(AGENTS.md 절대규칙 1): 기준 종가는 **as_of 당일까지 포함한** 마지막
+   영업일 종가다. as_of 는 이미 주문 시점보다 앞선 날이라(개입 판정은 마지막 거래일,
+   백테스트는 매수 하루 전) 그날 종가는 주문자가 이미 아는 값이고, 오히려 빼면
+   core/metrics/chasing 의 T−1 기준과 하루 어긋난다. 캐시 파일에는 as_of **이후**
+   종가도 들어있어서(장 마감 후 채운 파일) 경계를 안 걸면 조용히 미래를 보는데,
+   그 경계는 reference_close() 한 곳에만 있다.
 
 ⚠ 시세를 못 구하면(네트워크·미캐시·lookback 안에 영업일 없음) 발동하지 않고
    RuleContribution.warnings 에 사유를 남긴다. triggered=False 만 보면 "급등이 아님"
@@ -32,10 +35,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from core.rules.base import PriceSource, ProposedOrder, RuleContribution, previous_close
+from core.rules.base import PriceSource, ProposedOrder, RuleContribution, reference_close
 
 MAX_CONTRIBUTION = 40.0
-SURGE_THRESHOLD = 0.05  # 전일 종가 대비 +5% 이상이면 급등 추격으로 본다
+SURGE_THRESHOLD = 0.05  # 기준 종가 대비 +5% 이상이면 급등 추격으로 본다
 
 
 def _skip(warning: str | None = None) -> RuleContribution:
@@ -63,7 +66,7 @@ def evaluate(
     if order.side != "BUY":
         return _skip()
 
-    ref, warning = previous_close(order.ticker, as_of, price_source)
+    ref, warning = reference_close(order.ticker, as_of, price_source)
     if ref is None:
         return _skip(warning)
 
@@ -78,7 +81,7 @@ def evaluate(
             "date": ref.date.isoformat(),
             "name": order.name,
             "detail": (
-                f"직전 종가({ref.date}) {ref.close:,.0f}원 대비 {jump * 100:.1f}% 급등 "
+                f"기준 종가({ref.date}) {ref.close:,.0f}원 대비 {jump * 100:.1f}% 급등 "
                 f"가격으로 {order.quantity}주 매수"
             ),
         }

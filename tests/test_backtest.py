@@ -159,19 +159,20 @@ def test_룰이_매수일_이후_종가를_요청하지_않는다(two_ticker_tra
 
     # 매수마다 정확히 한 번씩 조회했는지 (조회 자체를 안 하면 감시기가 무력해진다)
     assert len(guard.seen) == len(buys)
-    # 판정 컷은 traded_at − 1일이고 기준 종가는 그 **직전** 영업일이라,
-    # 요청 구간의 끝은 매수일보다 최소 이틀 앞선다
-    assert all((buy_date - end).days >= 2 for buy_date, end in guard.seen)
+    # 판정 컷은 traded_at − 1일이고 기준 종가는 그 컷 **당일까지** 포함이라,
+    # 요청 구간의 끝은 매수일보다 딱 하루 앞선다(매수 전날 종가는 매수 시점에 이미
+    # 공시된 값이라 룩어헤드가 아니다 — core/rules/base.reference_close 참조)
+    assert all((buy_date - end).days == 1 for buy_date, end in guard.seen)
 
 
 def test_감시기는_컷을_넘긴_조회를_실제로_잡는다(two_ticker_trades, prices):
-    """감시기가 항상 통과하는 빈 껍데기가 아님을 보인다 — 컷을 하루 늦추면 실패한다."""
+    """감시기가 항상 통과하는 빈 껍데기가 아님을 보인다 — 컷을 하루 당기면 실패한다."""
     buys = two_ticker_trades[two_ticker_trades["side"] == "BUY"].sort_values(
         ["traded_at", "source_row"]
     )
-    # 매수일 자체를 상한으로 주는 대신 "매수 하루 전"을 상한으로 줘서, 정상 동작
-    # (= 이틀 전까지만 조회)이면 통과하고 미래를 보면 걸리는 경계를 만든다
-    too_late = _CutoffGuard(prices, [d - timedelta(days=3) for d in buys["traded_at"]])
+    # 정상 동작은 "매수 전날 종가까지" 조회다. 감시기에 주는 매수일을 하루 당기면
+    # 허용 상한이 매수 이틀 전으로 좁아져서, 정상 조회가 곧바로 걸린다
+    too_late = _CutoffGuard(prices, [d - timedelta(days=1) for d in buys["traded_at"]])
 
     with pytest.raises(AssertionError, match="룩어헤드"):
         run(two_ticker_trades, as_of=date(2026, 1, 20), price_source=too_late)
