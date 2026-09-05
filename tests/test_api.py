@@ -446,16 +446,64 @@ def test_세션은_상한을_넘으면_오래된_것부터_밀린다():
 
 
 def test_lifespan_이_기준선_캐시를_미리_채운다():
-    """콜드스타트 후 첫 진단이 페르소나 5종 계산을 뒤집어쓰지 않도록 기동 시 워밍."""
+    """콜드스타트 후 첫 진단이 기준선 계산을 뒤집어쓰지 않도록 기동 시 워밍."""
     service._reference_cache = None
     try:
         with TestClient(app):  # with 로 열어야 lifespan 이 실행된다
             cache = service._reference_cache
             assert cache is not None
             assert set(cache) == {"disposition_effect", "averaging_down", "chasing"}
-            assert all(len(v) == len(PRESETS) for v in cache.values())
+            # 기대값이 len(PRESETS) 에서 늘어난 이유: 기준선을 피측정치와 같은 생성
+            # 조건(DEMO_UNIVERSE·기본 n_episodes)으로 되돌리고, 분산은 seed 를 여러 개
+            # 돌려서 잡게 됐다 → 표본 = 페르소나 수 × seed 수.
+            expected = len(PRESETS) * len(service._REFERENCE_SEED_OFFSETS)
+            assert all(len(v) == expected for v in cache.values())
     finally:
         # 다른 테스트가 쓰는 전역이라 원상복구까지가 이 테스트의 책임
+        service._reference_cache = None
+
+
+def test_기준선_표본은_페르소나_수_곱하기_seed_수():
+    """(a) 표본 수 계약. 여기가 줄면 백분위 해상도(1/n)가 조용히 나빠진다."""
+    ref = service._reference_scores()
+    expected = len(PRESETS) * len(service._REFERENCE_SEED_OFFSETS)
+    assert expected == 20  # 5종 × seed 4개 — 프리워밍 3초 예산 안에서 고른 값
+    for key, scores in ref.items():
+        assert len(scores) == expected, key
+        assert all(0.0 <= s <= 100.0 for s in scores), key
+
+
+def test_대조군_chasing_백분위가_추격매수형보다_낮다():
+    """(b) 기준선과 피측정치의 생성 조건이 갈리면 이게 뒤집힌다.
+
+    예전에는 기준선만 8종목·300 episode 로 만들어서 대조군(16.67점)이 '상위 80%',
+    추격매수형(60.87점)이 '상위 100%' 로 나왔다 — 대조군이 상위에 붙는 건 백분위가
+    모집단 불일치라는 신호였다. 지금은 같은 조건이라 대조군이 중간 이하로 내려온다.
+    """
+
+    def chasing_percentile(persona: str) -> float:
+        body = client.get("/api/diagnose", params={"persona": persona}).json()
+        return next(m["percentile"] for m in body["metrics"] if m["key"] == "chasing")
+
+    baseline = chasing_percentile("rational_baseline")
+    prone = chasing_percentile("chasing_prone")
+    assert baseline < prone, f"대조군 {baseline} / 추격매수형 {prone}"
+    assert baseline <= 50.0, f"대조군이 중간보다 위: {baseline}"
+    assert prone >= 80.0, f"추격매수형이 상위가 아님: {prone}"
+
+
+def test_백분위는_결정론적이다():
+    """(c) seed 목록이 고정이므로 캐시를 비우고 다시 계산해도 같은 값이어야 한다."""
+
+    def percentiles() -> dict[str, float]:
+        body = client.get("/api/diagnose", params={"persona": "mixed_realistic"}).json()
+        return {m["key"]: m["percentile"] for m in body["metrics"]}
+
+    first = percentiles()
+    service._reference_cache = None  # 캐시가 아니라 계산이 결정론인지를 본다
+    try:
+        assert percentiles() == first
+    finally:
         service._reference_cache = None
 
 
