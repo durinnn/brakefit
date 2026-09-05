@@ -329,7 +329,7 @@
 - **기준선 프리워밍**: 서버 기동 시 lifespan 훅이 `service._reference_scores()` 를 한 번 돌린다(`api/main.py`). 페르소나 5종 × 300 episode 를 생성해 engine·metrics 를 돌리는 무거운 계산이라, Render 무료 플랜 콜드스타트 직후 첫 `/api/diagnose` 가 그 비용을 뒤집어쓰는 걸 막는다. 실패해도 서버는 뜨고(백분위는 50.0 폴백) 사유는 `logging.exception` 으로 남긴다
 - **시세는 네트워크 없이 동작**: `data/cache/prices/*.parquet`(8종목, 2025.11.03~2026.09.03)를 커밋해뒀다. `DEMO_AS_OF`(2026-08-18) 범위 안 데모 엔드포인트는 KRX 장애와 무관하게 응답한다
 - 보안 범위: 인증 없음(데모), **CORS `allow_origins=["*"]`**(로컬 Next.js 가 바로 붙게 열어둔 것 — 배포 시 좁힐 것), 업로드 **5MB** 상한(`MAX_UPLOAD_BYTES`, 초과 시 413), 세션 **50개 LRU**(`MAX_SESSIONS`, 메모리 전용·디스크 미저장), `ANTHROPIC_API_KEY` 는 Render 환경변수(미설정이면 폴백 템플릿)
-- ⚠ **슬립 방지 크론 핑은 레포에 설정이 없다.** `render.yaml` 에 cron 서비스가 없고 `.github/workflows` 도 없다 — 외부 서비스(cron-job.org 등)로 `/api/health` 를 주기 호출하도록 **D 가 대시보드에서 설정해야 하는 미완 항목**이다. 안 하면 15분 유휴 후 슬립 → 시연 첫 요청이 콜드스타트를 그대로 맞는다
+- 슬립 방지: Render 무료 인스턴스는 15분 유휴 후 슬립하므로 외부 크론(cron-job.org)이 `/api/health` 를 10분 간격으로 호출한다(2026-09-05 설정 완료, 레포 밖 설정). 기동 시 `lifespan` 에서 기준선을 프리워밍하므로 핑이 첫 요청 지연까지 흡수한다
 
 ## 10. 한계와 다음 단계 [A]
 
