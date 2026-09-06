@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from api import service
+from api import main, service
 from api.main import app
 from core.synth.personas import PRESETS
 
@@ -236,6 +236,37 @@ def test_프리필_주문의_등락률은_as_of_당일_종가_기준이다():
     assert samsung["lastDate"] == service.DEMO_AS_OF.isoformat()
 
 
+def test_개입이면_위험등급이_최소_주의다():
+    """스크린샷 회귀 — 빨간 경고 팝업 옆에 초록 "낮음" 게이지가 같이 뜨면 안 된다.
+
+    개입 조건이 "룰 하나라도 발동"으로 바뀐 뒤로(core/rules/engine.py) 프리필 주문은
+    5종 전부 riskScore < 50, 실측 최저 24.35 라 점수만 보면 LOW 였다. 등급은 표시용이라
+    api/service.py 에서 개입일 때만 최소 MEDIUM 으로 올린다.
+    """
+    for persona in PRESETS:
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
+        assert body["shouldIntervene"] is True, persona
+        assert body["riskLevel"] in ("MEDIUM", "HIGH"), (persona, body["riskScore"])
+        # 승격은 LOW → MEDIUM 만 — HIGH 는 점수 >= 50 이라는 의미를 유지한다
+        if body["riskScore"] < service.RISK_LEVEL_THRESHOLDS[1]:
+            assert body["riskLevel"] == "MEDIUM", persona
+
+
+def test_미개입_주문은_등급이_그대로다():
+    """승격은 개입일 때만 — 미개입 주문(룰 전부 미발동)은 점수 기준 LOW 를 유지한다."""
+    sell = {"ticker": "005930", "name": "삼성전자", "side": "SELL", "quantity": 5, "price": 280000}
+    non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
+    assert non_holders
+
+    for persona in non_holders:
+        body = client.post("/api/simulate-order", params={"persona": persona}, json=sell).json()
+        assert body["shouldIntervene"] is False, persona
+        assert body["riskScore"] < service.RISK_LEVEL_THRESHOLDS[0], persona
+        assert body["riskLevel"] == "LOW", persona
+
+
 def test_미보유_종목_신규진입_추격매수도_판정된다():
     """PR 26 회귀 — 미보유 종목 BUY 가 "판정 불가"로 빠지면 안 된다."""
     non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
@@ -445,6 +476,121 @@ def test_세션은_상한을_넘으면_오래된_것부터_밀린다():
     assert len(service._SESSIONS) == service.MAX_SESSIONS
 
 
+# ── 결과 캐시 · 프리워밍 ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def clean_caches():
+    """페르소나 캐시를 비운 상태로 시작하고, 끝나면 되돌린다(다른 테스트와 공유 전역).
+
+    기준선은 미리 채워둔다 — _reference_scores() 도 build_engine 을 20번 부르므로,
+    안 채우면 build 호출 횟수를 세는 테스트가 실행 순서에 따라 결과가 달라진다.
+    """
+    service._reference_scores()
+    service._PERSONA_STATES.clear()
+    yield
+    service._PERSONA_STATES.clear()
+
+
+def test_진단은_두_번째_호출부터_엔진을_다시_빌드하지_않는다(monkeypatch, clean_caches):
+    """Render 백테스트 16초의 원인 — 요청마다 처음부터 다시 계산 — 이 사라졌는지.
+
+    페르소나 결과는 결정론적이라(seed 고정 + 커밋된 시세 캐시) 같은 값을 두 번
+    계산할 이유가 없다. 값이 같은지가 아니라 **다시 계산하지 않는지**를 본다.
+    """
+    builds: list[int] = []
+    real_build = service.build_engine
+
+    def counting_build(*args, **kwargs):
+        builds.append(1)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(service, "build_engine", counting_build)
+
+    first = client.get("/api/diagnose", params={"persona": "disposition_prone"}).json()
+    assert len(builds) == 1
+    second = client.get("/api/diagnose", params={"persona": "disposition_prone"}).json()
+    assert len(builds) == 1, "두 번째 진단이 engine 을 다시 빌드했다"
+    assert second == first
+    # 같은 소스의 모의 주문도 그 빌드를 그대로 쓴다(주문 결과 자체는 캐시하지 않음)
+    r = client.post(
+        "/api/simulate-order",
+        params={"persona": "disposition_prone"},
+        json={"ticker": "005930", "name": "삼성전자", "side": "BUY", "quantity": 1, "price": 70000},
+    )
+    assert r.status_code == 200, r.text
+    assert len(builds) == 1, "모의 주문이 engine 을 다시 빌드했다"
+
+
+def test_백테스트도_소스당_한_번만_계산된다(monkeypatch, clean_caches):
+    runs: list[int] = []
+    real_run = service.run_backtest
+
+    def counting_run(*args, **kwargs):
+        runs.append(1)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(service, "run_backtest", counting_run)
+
+    first = client.get("/api/backtest", params={"persona": "rational_baseline"}).json()
+    second = client.get("/api/backtest", params={"persona": "rational_baseline"}).json()
+    assert len(runs) == 1, "두 번째 백테스트가 다시 돌았다"
+    assert second == first
+    # 페르소나가 다르면 캐시가 갈려야 한다 — 키를 안 나누면 전부 같은 결과가 나온다
+    client.get("/api/backtest", params={"persona": "disposition_prone"})
+    assert len(runs) == 2
+
+
+def test_세션이_LRU에서_밀리면_계산_캐시도_같이_사라진다():
+    """캐시가 세션보다 오래 살면 LRU 를 둔 이유(무료 인스턴스 512MB)가 무너진다."""
+    tiny_csv = (
+        "traded_at,ticker,name,side,quantity,price\n2026-08-10,005930,삼성전자,BUY,1,70000\n"
+    ).encode()
+
+    first_sid = _upload("tiny.csv", tiny_csv).json()["sessionId"]
+    assert client.get("/api/diagnose", params={"session": first_sid}).status_code == 200
+    assert first_sid in service._SESSION_STATES  # 계산 결과가 붙어 있어야 한다
+    assert service._SESSION_STATES[first_sid].engine is not None
+
+    for _ in range(service.MAX_SESSIONS):  # 상한만큼 더 올려서 첫 세션을 밀어낸다
+        assert _upload("tiny.csv", tiny_csv).status_code == 200
+
+    assert not service.has_session(first_sid)
+    assert first_sid not in service._SESSION_STATES
+    assert first_sid not in service._SESSION_WARNINGS
+
+
+def test_프리워밍이_페르소나_캐시를_채운다(clean_caches):
+    """기동 후 백그라운드 스레드가 5종 진단·백테스트를 미리 계산해둔다."""
+    with TestClient(app):
+        pass
+    main._prewarm_thread.join(timeout=120)
+    assert not main._prewarm_thread.is_alive(), "프리워밍이 안 끝났다"
+
+    assert set(service._PERSONA_STATES) == set(PRESETS)
+    for key, state in service._PERSONA_STATES.items():
+        assert state.diagnosis is not None, key
+        assert state.backtest is not None, key
+
+
+def test_프리워밍이_실패해도_서버는_뜬다(monkeypatch, caplog, clean_caches):
+    """캐시는 가속 장치일 뿐 — 실패하면 사유만 남기고 요청 때 직접 계산되어야 한다."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("프리워밍 폭발")
+
+    monkeypatch.setattr(service, "diagnose", boom)
+
+    with caplog.at_level("ERROR"):
+        with TestClient(app) as warm_client:
+            assert warm_client.get("/api/health").json() == {"status": "ok"}
+        main._prewarm_thread.join(timeout=30)
+        assert not main._prewarm_thread.is_alive()
+
+    assert any("페르소나 프리워밍 실패" in r.getMessage() for r in caplog.records), caplog.text
+    assert "프리워밍 폭발" in caplog.text  # 사유를 삼키지 않는다 — 스택까지 남아야 한다
+
+
 def test_lifespan_이_기준선_캐시를_미리_채운다():
     """콜드스타트 후 첫 진단이 기준선 계산을 뒤집어쓰지 않도록 기동 시 워밍."""
     service._reference_cache = None
@@ -459,6 +605,8 @@ def test_lifespan_이_기준선_캐시를_미리_채운다():
             expected = len(PRESETS) * len(service._REFERENCE_SEED_OFFSETS)
             assert all(len(v) == expected for v in cache.values())
     finally:
+        # 프리워밍 스레드가 뒤따르는 테스트로 흘러들어가지 않게 여기서 끊는다
+        main._prewarm_thread.join(timeout=120)
         # 다른 테스트가 쓰는 전역이라 원상복구까지가 이 테스트의 책임
         service._reference_cache = None
 
@@ -500,7 +648,11 @@ def test_백분위는_결정론적이다():
         return {m["key"]: m["percentile"] for m in body["metrics"]}
 
     first = percentiles()
-    service._reference_cache = None  # 캐시가 아니라 계산이 결정론인지를 본다
+    # 캐시가 아니라 **계산**이 결정론인지를 보는 테스트다 — 기준선뿐 아니라 진단 결과
+    # 캐시(_PERSONA_STATES)까지 비워야 실제로 다시 계산된다. 안 비우면 같은 객체를
+    # 두 번 읽고 항상 통과하는 빈 테스트가 된다.
+    service._reference_cache = None
+    service._PERSONA_STATES.pop("mixed_realistic", None)
     try:
         assert percentiles() == first
     finally:

@@ -143,8 +143,9 @@ export default function OrderForm({
    * risk_score >= 50 만 봤는데, 룰 기여가 "MAX_CONTRIBUTION × 과거 지표점수/100" 이라
    * 두 룰이 동시에 세게 걸려야 넘는 구조였고 합성 페르소나는 한 축만 강해서 데모
    * 페르소나 5종 × DEMO_UNIVERSE 3종목 어떤 조합도 50점에 못 닿았다(실측 최대 29.57).
-   * 이제 발동한 룰이 있으면 점수가 낮아도 팝업이 뜬다 — 대신 riskLevel 은 여전히 점수
-   * 기반이라 "개입인데 LOW" 조합이 정상이다. riskLevel 로 팝업 여부를 재계산하지 말 것.
+   * 이제 발동한 룰이 있으면 점수가 낮아도 팝업이 뜬다. riskLevel 은 기본적으로 점수
+   * 기반이지만 개입이면 서버가 최소 MEDIUM("주의")으로 올려준다 — 빨간 경고 팝업 옆에
+   * 초록 "낮음" 게이지가 뜨던 문제 때문. riskLevel 로 팝업 여부를 재계산하지 말 것.
    */
   const intervening = report?.shouldIntervene === true;
 
