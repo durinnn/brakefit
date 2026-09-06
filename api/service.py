@@ -743,6 +743,17 @@ def simulate_order(
     else:
         risk_level = "HIGH"
 
+    # 개입이면 등급은 최소 "주의"(MEDIUM)로 올린다.
+    #
+    # 왜: 개입 판정이 점수 임계에서 "룰 하나라도 발동"으로 바뀐 뒤로(core/rules/engine.py),
+    # 팝업은 빨간 경고를 띄우는데 게이지는 초록 "낮음"으로 뜨는 조합이 실제로 나왔다
+    # (예: riskScore 24.35 + 추격매수 룰 발동). 화면 두 곳이 반대 얘기를 하면 사용자는
+    # 둘 다 안 믿는다. 등급은 어디까지나 표시용이라 여기서만 보정하고, 점수(risk_score)와
+    # 개입 판정(should_intervene)은 룰이 계산한 값 그대로 둔다.
+    # HIGH 승격은 하지 않는다 — 점수 >= INTERVENE_THRESHOLD 라는 기존 의미를 지킨다.
+    if report.should_intervene and risk_level == "LOW":
+        risk_level = "MEDIUM"
+
     # 표시용 등락률도 룰이 판정에 쓴 것과 **같은 종가**를 기준으로 한다. 예전에는
     # timeline 마지막 행의 close 를 썼는데(= 보유 기간에만 존재 + 청산된 옛 에피소드면
     # stale), 화면의 "기준 종가 대비 %"와 추격매수 룰의 급등률이 서로 다른 숫자를

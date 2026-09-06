@@ -82,6 +82,10 @@ export interface InterventionReport {
   order: PendingOrder;
   /** 0~100 위험 게이지 */
   riskScore: number;
+  /**
+   * 표시용 등급. 기본은 riskScore 기준이지만 shouldIntervene 이면 최소 MEDIUM("주의").
+   * 그래서 개입 팝업이 뜬 상태에서 "낮음" 게이지가 같이 나오는 일은 없다.
+   */
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
   /**
    * 개입 팝업을 띄울지의 판정 결과(백엔드 core/rules 가 정한다).

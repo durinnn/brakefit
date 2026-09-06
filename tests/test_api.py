@@ -236,6 +236,37 @@ def test_프리필_주문의_등락률은_as_of_당일_종가_기준이다():
     assert samsung["lastDate"] == service.DEMO_AS_OF.isoformat()
 
 
+def test_개입이면_위험등급이_최소_주의다():
+    """스크린샷 회귀 — 빨간 경고 팝업 옆에 초록 "낮음" 게이지가 같이 뜨면 안 된다.
+
+    개입 조건이 "룰 하나라도 발동"으로 바뀐 뒤로(core/rules/engine.py) 프리필 주문은
+    5종 전부 riskScore < 50, 실측 최저 24.35 라 점수만 보면 LOW 였다. 등급은 표시용이라
+    api/service.py 에서 개입일 때만 최소 MEDIUM 으로 올린다.
+    """
+    for persona in PRESETS:
+        body = client.post(
+            "/api/simulate-order", params={"persona": persona}, json=DEMO_PREFILL_ORDER
+        ).json()
+        assert body["shouldIntervene"] is True, persona
+        assert body["riskLevel"] in ("MEDIUM", "HIGH"), (persona, body["riskScore"])
+        # 승격은 LOW → MEDIUM 만 — HIGH 는 점수 >= 50 이라는 의미를 유지한다
+        if body["riskScore"] < service.RISK_LEVEL_THRESHOLDS[1]:
+            assert body["riskLevel"] == "MEDIUM", persona
+
+
+def test_미개입_주문은_등급이_그대로다():
+    """승격은 개입일 때만 — 미개입 주문(룰 전부 미발동)은 점수 기준 LOW 를 유지한다."""
+    sell = {"ticker": "005930", "name": "삼성전자", "side": "SELL", "quantity": 5, "price": 280000}
+    non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
+    assert non_holders
+
+    for persona in non_holders:
+        body = client.post("/api/simulate-order", params={"persona": persona}, json=sell).json()
+        assert body["shouldIntervene"] is False, persona
+        assert body["riskScore"] < service.RISK_LEVEL_THRESHOLDS[0], persona
+        assert body["riskLevel"] == "LOW", persona
+
+
 def test_미보유_종목_신규진입_추격매수도_판정된다():
     """PR 26 회귀 — 미보유 종목 BUY 가 "판정 불가"로 빠지면 안 된다."""
     non_holders = [p for p in PRESETS if not _holds_at_as_of(p, "005930")]
