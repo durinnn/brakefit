@@ -29,7 +29,9 @@ export default function BiasMetricCard({ metric }: { metric: BiasMetric }) {
 
       <div className="mt-3 flex items-center gap-2 text-xs text-ink-400">
         <span className="rounded-md bg-ink-800 px-2 py-1 tabular">
-          상위 {metric.percentile}%
+          {/* API 의 percentile 은 "기준선 표본 중 이 점수 이하 비율" — 편향이 심할수록 커진다.
+              "상위 N%" 는 반대 방향이라 100 − p 로 뒤집어 표기 */}
+          상위 {Math.round((100 - metric.percentile) * 10) / 10}%
         </span>
         <span className="tabular">{metric.sampleCount}건 기준</span>
         {metric.delta !== null ? (
