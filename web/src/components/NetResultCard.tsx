@@ -7,7 +7,13 @@ interface NetResultCardProps {
   hitRate: number;
 }
 
-/** 최종 방어 순수익을 화면에서 가장 크게 강조하는 카드. */
+/**
+ * 개입의 순효과(회피 손실 − 놓친 이익)를 화면에서 가장 크게 강조하는 카드.
+ *
+ * 라벨이 "방어한 순수익" 이었는데, 이 값은 음수도 정상 결과다(§7 — 페르소나 5종
+ * 전부 순손실). 음수 금액 위에 "방어한 순수익" 이 붙으면 "마이너스만큼 방어했다" 는
+ * 말이 안 되는 문장이 된다. 부호와 무관하게 성립하는 "개입의 순효과" 로 바꿨다.
+ */
 export default function NetResultCard({
   netBenefit,
   netBenefitRate,
@@ -30,7 +36,7 @@ export default function NetResultCard({
           isPositive ? "text-safe-soft" : "text-risk-soft"
         }`}
       >
-        Net · 방어한 순수익
+        Net · 개입의 순효과
       </p>
 
       <p

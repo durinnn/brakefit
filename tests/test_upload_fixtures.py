@@ -198,7 +198,7 @@ def test_KB_0112_의_미해결_종목은_엔진에서만_빠진다(stub_ticker_l
 
     assert int(trades["ticker"].isna().sum()) == 1  # 가나다반도체 매수 1건
     result = build_engine(trades, as_of=date(2026, 8, 13))
-    assert any("ticker 미해결 1건" in w for w in result.warnings)
+    assert any("종목코드를 확인하지 못한 거래 1건" in w for w in result.warnings)
     assert set(result.episodes["ticker"]) == {"005930", "035720", "035420"}
 
 
@@ -261,7 +261,7 @@ def test_KB_0112_은_업로드_경고가_진단_응답으로_이어진다(stub_t
     for w in upload_body["warnings"]:
         assert w in body["warnings"]
     assert any("가나다반도체" in w for w in body["warnings"])
-    assert any("ticker 미해결 1건" in w for w in body["warnings"])
+    assert any("종목코드를 확인하지 못한 거래 1건" in w for w in body["warnings"])
     assert len(body["warnings"]) == len(set(body["warnings"]))  # 중복 없이
 
 
@@ -330,3 +330,61 @@ def test_헤더가_엉뚱하면_세션이_안_생긴다():
     before = set(service._SESSIONS)
     _upload("broken_columns.csv")
     assert set(service._SESSIONS) == before
+
+
+# ── ⑤ 유효 거래 0건 — 종목코드를 하나도 못 찾은 세션 ─────────────────────────
+# 파싱은 성공했는데 종목코드 역매핑이 전부 실패하면 엔진에 들어가는 거래가 0건이 된다.
+# 그때 빈 timeline 으로 지표를 계산하면 "편향 사례 0건" → 종합 12.5점 "안정" 이라는
+# 정상처럼 생긴 오답이 나온다. 아래 세 테스트가 그 회귀를 막는다.
+
+
+@pytest.fixture
+def all_tickers_unresolved(monkeypatch):
+    """resolve_tickers() 가 한 종목도 못 찾은 상황."""
+
+    def fake_resolve(trades, *, cache=None, use_pykrx=True):
+        out = trades.copy()
+        out["ticker"] = None
+        return out, sorted({str(n) for n in trades["name"]})
+
+    monkeypatch.setattr(kb_hts, "resolve_tickers", fake_resolve)
+
+
+def test_유효_거래_0건이면_진단이_분석_불가로_나온다(all_tickers_unresolved):
+    upload_body = _upload("kb_0112_sample.csv").json()
+    assert upload_body["tradeCount"] == 10  # 파싱 자체는 성공했다
+
+    body = _diagnose(upload_body["sessionId"]).json()
+
+    # 점수·등급 대신 상태 — 0점이 "안정" 으로 새면 이 테스트가 잡는다
+    assert body["overallGrade"] == service.UNANALYZABLE_GRADE
+    assert body["overallScore"] == 0.0
+    assert body["totalTrades"] == 10  # 세션에는 그대로 남아있다
+    assert {m["key"] for m in body["metrics"]} == {"disposition", "averaging_down", "chasing"}
+    for m in body["metrics"]:
+        assert m["score"] == 0.0
+        assert m["sampleCount"] == 0
+        assert m["summary"] == "분석 가능한 거래가 없습니다"
+    assert any("분석할 수 있는 거래가 없습니다" in w for w in body["warnings"])
+
+
+def test_유효_거래_0건이면_백테스트가_0건이고_사유를_남긴다(all_tickers_unresolved):
+    session_id = _upload("kb_0112_sample.csv").json()["sessionId"]
+
+    r = client.get("/api/backtest", params={"session": session_id})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["interventionCount"] == 0
+    assert body["cases"] == []
+    assert body["netBenefit"] == 0.0
+    assert any("분석할 수 있는 거래가 없습니다" in w for w in body["warnings"])
+
+
+def test_유효_거래_0건이면_주문_유니버스가_빈다(all_tickers_unresolved):
+    """폼이 고를 종목이 없다 — 프론트(OrderForm)가 안내 화면으로 분기하는 신호다."""
+    session_id = _upload("kb_0112_sample.csv").json()["sessionId"]
+
+    r = client.get("/api/universe", params={"session": session_id})
+    assert r.status_code == 200, r.text
+    assert r.json() == []

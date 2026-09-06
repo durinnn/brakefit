@@ -1,7 +1,9 @@
 import PageHeader from "@/components/PageHeader";
+import AnalysisUnavailable from "@/components/AnalysisUnavailable";
 import ComparisonBar from "@/components/ComparisonBar";
 import NetResultCard from "@/components/NetResultCard";
 import SynthDisclaimer from "@/components/SynthDisclaimer";
+import WarningBanner from "@/components/WarningBanner";
 import { getBacktestResult } from "@/lib/api";
 import { getServerSession } from "@/lib/session.server";
 import { formatWon } from "@/lib/format";
@@ -11,8 +13,34 @@ export default async function BacktestPage() {
   const session = await getServerSession();
   const { data: result, source } = await getBacktestResult(session);
 
+  /**
+   * 개입 대상이 한 건도 없으면 0원 NET 카드와 빈 막대바만 남는다 — 그건
+   * "브레이크가 아무것도 못 막았다" 로 읽힌다. 사유(분석 대상 0건 등)는
+   * warnings 로 오므로 배너와 함께 안내 화면으로 대체한다.
+   */
+  if (result.interventionCount === 0) {
+    return (
+      <>
+        <WarningBanner warnings={result.warnings ?? []} />
+        <PageHeader
+          eyebrow="백테스트 증명"
+          title="증명할 개입 사례가 없습니다"
+          caption={result.periodLabel}
+        />
+        <AnalysisUnavailable
+          title="개입 대상 거래가 없습니다"
+          detail="브레이크가 판정할 매수 거래를 찾지 못했습니다. 종목코드를 확인한 국내 주식 체결이 들어있는 파일을 올리거나, 데모 페르소나로 먼저 둘러보세요."
+        />
+        <SynthDisclaimer source={source} />
+      </>
+    );
+  }
+
   return (
     <>
+      {/* 숫자보다 먼저 — 어떤 거래가 빠진 채 계산된 결과인지가 먼저다 */}
+      <WarningBanner warnings={result.warnings ?? []} />
+
       <PageHeader
         eyebrow="백테스트 증명"
         title="브레이크를 걸었다면?"

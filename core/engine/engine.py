@@ -109,7 +109,10 @@ def build(trades: pd.DataFrame, as_of: date | None = None) -> EngineResult:
     # "예외는 삼키지 않는다" 에 따라 버린 건수와 추정 원인을 남긴다.
     unresolved = int(trades["ticker"].isna().sum())
     if unresolved:
-        warnings.append(f"ticker 미해결 {unresolved}건 제외 (resolve_tickers() 미적용?)")
+        # 사용자에게 그대로 노출되는 문구다(api/schemas.py DiagnosisReport.warnings →
+        # web WarningBanner). 내부 함수명(resolve_tickers)을 적어두면 화면에서 읽는
+        # 사람에게는 아무 의미가 없어서, 원인은 코드 주석(바로 위)에만 남긴다.
+        warnings.append(f"종목코드를 확인하지 못한 거래 {unresolved}건은 분석에서 제외했습니다")
 
     tickers = sorted(trades["ticker"].dropna().unique())
     global_start = trades["traded_at"].min()

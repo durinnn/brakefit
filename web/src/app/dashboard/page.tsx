@@ -1,5 +1,6 @@
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
+import AnalysisUnavailable from "@/components/AnalysisUnavailable";
 import ArcGauge from "@/components/ArcGauge";
 import BiasMetricCard from "@/components/BiasMetricCard";
 import DataSourceBadge from "@/components/DataSourceBadge";
@@ -17,6 +18,35 @@ const GRADE_TONE = {
 export default async function DashboardPage() {
   const session = await getServerSession();
   const { data: report, source, sessionExpired } = await getDiagnosisReport(session);
+
+  /**
+   * 분석 대상 거래가 0건이면 점수·게이지·지표 카드를 아예 그리지 않는다.
+   * 이때 서버가 주는 값은 전부 0 이라, 그대로 그리면 "안정 0점"으로 보여서
+   * 거래를 한 건도 못 읽은 상태가 정상 진단과 구분되지 않는다.
+   */
+  if (report.overallGrade === "분석 불가") {
+    return (
+      <>
+        <DataSourceBadge
+          source={source}
+          tradeCount={report.totalTrades}
+          sessionExpired={sessionExpired}
+        />
+        <WarningBanner warnings={report.warnings ?? []} />
+        <PageHeader
+          eyebrow="편향 건강검진"
+          title="진단을 만들지 못했습니다"
+          caption={report.periodLabel}
+        />
+        <AnalysisUnavailable
+          title="분석 가능한 거래가 없습니다"
+          detail={`업로드한 파일에서 국내 주식 체결 ${report.totalTrades.toLocaleString("ko-KR")}건이 종목코드 미해결로 제외됐습니다. 다른 파일을 올리거나 데모 페르소나로 먼저 둘러보세요.`}
+        />
+        <SynthDisclaimer source={source} />
+      </>
+    );
+  }
+
   const tone = GRADE_TONE[report.overallGrade];
 
   return (
