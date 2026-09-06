@@ -61,7 +61,9 @@ export default function NetResultCard({
           </p>
         </div>
         <div className="bg-ink-900 px-3 py-3">
-          <p className="text-[11px] text-ink-400">개입 적중률</p>
+          {/* "적중률" 은 예측이 맞았다는 뜻으로 읽히는데, 이 값(hitRate)은
+              "개입 중 결과적으로 손실을 피한 비율" 이라 의미가 다르다. 표시만 바꾼다 */}
+          <p className="text-[11px] text-ink-400">손실 회피율</p>
           <p className="tabular mt-1 text-lg font-bold text-ink-100">
             {hitRate}%
           </p>
