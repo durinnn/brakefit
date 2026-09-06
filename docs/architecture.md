@@ -7,7 +7,7 @@
 flowchart TB
     User(("사용자<br/>2030 개인투자자"))
 
-    subgraph SVC["매매 브레이크 웹서비스 (AWS 배포)"]
+    subgraph SVC["매매 브레이크 웹서비스 (Vercel + Render 배포)"]
         UI["웹 UI · D<br/>① 업로드·진단 리포트<br/>② 모의 주문창(게이지·워터폴·팝업)<br/>③ 백테스트 결과"]
         API["API 서버 (FastAPI) · D<br/>/upload /report /simulate-order /backtest"]
         PARSER["CSV 파서 · B<br/>KB M-able CSV → 표준 거래내역"]
