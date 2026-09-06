@@ -102,13 +102,17 @@ def _extract_first_mermaid(text: str) -> str:
 
 
 def _insert_architecture_diagram(body: str, diagram: str) -> str:
-    """§9 시스템 구성 제목 바로 아래에 아키텍처 다이어그램을 끼워 넣는다."""
+    """"시스템 아키텍처" 절 제목 바로 아래에 아키텍처 다이어그램을 끼워 넣는다.
+
+    절 번호가 아니라 제목 키워드로 찾는다 — 목차를 재배열할 때마다 번호가 바뀌어서 번호에
+    묶어두면 조용히 빠진다.
+    """
     lines = body.splitlines()
     for i, line in enumerate(lines):
-        if re.match(r"^##\s+9\.", line):
+        if re.match(r"^##\s+\d+\.\s+.*(아키텍처|시스템 구성)", line):
             block = ["", "```mermaid", diagram, "```", ""]
             return "\n".join(lines[: i + 1] + block + lines[i + 1 :])
-    print("경고: §9 섹션을 못 찾아 아키텍처 다이어그램을 넣지 못했다.", file=sys.stderr)
+    print("경고: 시스템 아키텍처 절을 못 찾아 다이어그램을 넣지 못했다.", file=sys.stderr)
     return body
 
 
