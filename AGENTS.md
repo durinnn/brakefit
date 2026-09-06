@@ -25,6 +25,8 @@ python tools/generate_synth_fixtures.py              # fixtures/synth/*.csv 재�
 python tools/run_engine.py --persona disposition_prone   # engine 결과 확인 (--csv <파일> 도 가능)
 
 uv run uvicorn api.main:app --reload                 # API 서버 실행 (http://localhost:8000/docs)
+
+uv run python tools/build_spec_html.py   # docs/spec.html (인쇄→PDF 제출용)
 ```
 
 ## 폴더 오너십 — 자기 폴더 밖은 PR 리뷰 필수

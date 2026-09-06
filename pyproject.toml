@@ -26,6 +26,11 @@ web = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",   # CSV 업로드
 ]
+# 개발 전용 — 기능명세서(docs/spec.md) 를 인쇄용 HTML 로 뽑을 때만 쓴다.
+# 런타임(api/·core/) 은 이걸 import 하지 않으므로 배포(render.yaml) 에는 넣지 않는다.
+docs = [
+    "markdown>=3.5",
+]
 
 [dependency-groups]
 dev = [
