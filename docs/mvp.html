@@ -256,7 +256,7 @@ table img { max-height: 260px; width: auto; }
 </tr>
 </tbody>
 </table>
-<p><strong>데모 페르소나 전환.</strong> 주소 끝에 <code>?persona=chasing_prone</code> 처럼 페르소나 키를 붙이면 그 페르소나의 데이터로 전 화면이 다시 그려진다. 키는 rational_baseline(차분형 대조군) · disposition_prone(처분효과형) · averaging_down_prone(물타기형) · chasing_prone(추격매수형) · mixed_realistic(복합형, 기본값) 다섯 가지다.</p>
+<p><strong>데모 데이터.</strong> 업로드 없이 접속하면 화면은 합성 페르소나 중 추격매수형(chasing_prone)으로 고정되어 그려진다. 거래내역을 업로드하면 그 뒤로는 전 화면이 업로드한 데이터 기준으로 바뀌며, 진단 대시보드 상단의 "데모로 되돌리기"로 다시 데모 데이터로 돌아온다(모의 주문창의 판정 결과도 이 출처를 따르므로, 업로드 데이터에 추격매수 이력이 없으면 같은 주문에 위험 점수 0의 옅은 확인 팝업이 뜬다). 나머지 페르소나 네 종(rational_baseline 차분형 대조군 · disposition_prone 처분효과형 · averaging_down_prone 물타기형 · mixed_realistic 복합형)의 결과는 API 문서에서 <code>persona</code> 파라미터로 직접 조회할 수 있다.</p>
 <p><strong>샘플 업로드 파일.</strong> 업로드 흐름을 직접 확인하려면 소스 저장소의 <code>fixtures/upload/</code> 에 있는 표준 CSV를 올리면 된다. 데이터 품질 경고와 제외 행 표시까지 함께 볼 수 있는 표본도 같은 폴더에 들어 있다.</p>
 <hr />
 <h2 id="1">1. 개요와 구현 범위</h2>
@@ -457,7 +457,7 @@ table img { max-height: 260px; width: auto; }
 <td>상위 35%</td>
 </tr>
 <tr>
-<td>복합형(데모 기본)</td>
+<td>복합형</td>
 <td>30.43</td>
 <td>7</td>
 <td>상위 25%</td>
@@ -585,7 +585,7 @@ table img { max-height: 260px; width: auto; }
 <td>22.2%</td>
 </tr>
 <tr>
-<td>복합형(데모 기본)</td>
+<td>복합형</td>
 <td>2025.12.04~2026.08.18</td>
 <td>12</td>
 <td>7,000</td>
