@@ -17,8 +17,10 @@
 
 입력:
   docs/spec.md          본문 (표지 정보는 상단 목록에서 파싱)
-  docs/architecture.md  첫 mermaid 블록 → spec §9 위치에 삽입
-  docs/user-flow.md     → 부록 D 로 붙임 (spec §2 의 링크가 이 부록을 가리키게 바꿈)
+  docs/architecture.md  첫 mermaid 블록 → spec 아키텍처 절에 삽입 (본문이 이미 다이어그램을
+                        갖고 있으면 건너뜀)
+  docs/user-flow.md     → 부록 D 로 붙임 (본문에 부록 D 가 이미 있으면 건너뜀.
+                        붙일 때는 spec 안의 user-flow.md 링크가 이 부록을 가리키게 바꿈)
 """
 
 from __future__ import annotations
@@ -102,18 +104,36 @@ def _extract_first_mermaid(text: str) -> str:
 
 
 def _insert_architecture_diagram(body: str, diagram: str) -> str:
-    """"시스템 아키텍처" 절 제목 바로 아래에 아키텍처 다이어그램을 끼워 넣는다.
+    """ "시스템 아키텍처" 절 제목 바로 아래에 아키텍처 다이어그램을 끼워 넣는다.
 
     절 번호가 아니라 제목 키워드로 찾는다 — 목차를 재배열할 때마다 번호가 바뀌어서 번호에
-    묶어두면 조용히 빠진다.
+    묶어두면 조용히 빠진다. 다만 "AI 아키텍처" 같은 절이 앞에 있으면 느슨한 키워드가 그쪽을
+    먼저 물어버리므로, "시스템 아키텍처/시스템 구성" 을 우선 찾고 없을 때만 느슨하게 본다.
+
+    본문이 이미 제목 바로 아래에 mermaid 블록을 갖고 있으면 그것이 우선이다 — 넣으면
+    같은 다이어그램이 두 번 그려진다(본문 쪽이 spec 에 맞게 손질된 판본이라 그쪽을 남긴다).
     """
     lines = body.splitlines()
-    for i, line in enumerate(lines):
-        if re.match(r"^##\s+\d+\.\s+.*(아키텍처|시스템 구성)", line):
-            block = ["", "```mermaid", diagram, "```", ""]
-            return "\n".join(lines[: i + 1] + block + lines[i + 1 :])
-    print("경고: 시스템 아키텍처 절을 못 찾아 다이어그램을 넣지 못했다.", file=sys.stderr)
-    return body
+    target = None
+    for pattern in (r"^##\s+\d+\.\s+.*(시스템 아키텍처|시스템 구성)", r"^##\s+\d+\.\s+.*아키텍처"):
+        for i, line in enumerate(lines):
+            if re.match(pattern, line):
+                target = i
+                break
+        if target is not None:
+            break
+    if target is None:
+        print("경고: 시스템 아키텍처 절을 못 찾아 다이어그램을 넣지 못했다.", file=sys.stderr)
+        return body
+
+    for nxt in lines[target + 1 :]:
+        if not nxt.strip():
+            continue
+        if nxt.lstrip().startswith("```mermaid"):
+            return body
+        break
+    block = ["", "```mermaid", diagram, "```", ""]
+    return "\n".join(lines[: target + 1] + block + lines[target + 1 :])
 
 
 def _build_user_flow_appendix(text: str) -> str:
@@ -455,8 +475,15 @@ def build(spec_path: Path, out_path: Path) -> Path:
     body = _insert_architecture_diagram(
         body, _extract_first_mermaid((DOCS_DIR / "architecture.md").read_text(encoding="utf-8"))
     )
-    appendix = _build_user_flow_appendix((DOCS_DIR / "user-flow.md").read_text(encoding="utf-8"))
-    combined = body.rstrip() + "\n\n" + appendix
+    # 본문이 부록 D 를 직접 갖고 있으면 user-flow.md 를 붙이지 않는다 — 붙이면 부록 D 가
+    # 두 벌 들어간다. (spec 본문의 흐름도는 인쇄용으로 줄인 판본이라 그쪽을 남긴다.)
+    if re.search(r"^###\s+부록 D\.", body, re.MULTILINE):
+        combined = body.rstrip() + "\n"
+    else:
+        appendix = _build_user_flow_appendix(
+            (DOCS_DIR / "user-flow.md").read_text(encoding="utf-8")
+        )
+        combined = body.rstrip() + "\n\n" + appendix
 
     combined = _loosen_lists(combined)
     combined, image_count = _inline_images(combined, DOCS_DIR)
