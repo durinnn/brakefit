@@ -3,8 +3,8 @@
 > 2026 금융 AI Challenge 제출 기능 명세서. 제출: 2026-09-07 10:00.
 > 원본은 `docs/spec.md`, 인쇄본(PDF 변환용)은 `docs/spec.html`.
 
-- 서비스 URL: TODO (Vercel)
-- API 문서: TODO (Render `/docs`)
+- 서비스 URL: https://brakefit.vercel.app
+- API 문서: https://brakefit.onrender.com/docs
 - 레포: https://github.com/durinnn/brakefit
 - 팀: A 김종우(리더·엔진) / B (파서·합성) / C (지표·룰·가드) / D (백테스트·API·웹·배포)
 
