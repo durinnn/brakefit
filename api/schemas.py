@@ -84,7 +84,10 @@ class PatternWarning(CamelModel):
 class InterventionReport(CamelModel):
     order: PendingOrder
     risk_score: float = Field(serialization_alias="riskScore")
-    risk_level: str = Field(serialization_alias="riskLevel")  # LOW|MEDIUM|HIGH
+    #: 표시용 등급 LOW|MEDIUM|HIGH. 기본은 risk_score 기준(RISK_LEVEL_THRESHOLDS)이지만
+    #: should_intervene 이면 최소 MEDIUM 으로 올라간다(api/service.py) — 개입 여부를
+    #: 이 값으로 되짚지 말 것.
+    risk_level: str = Field(serialization_alias="riskLevel")
     #: 개입 팝업을 띄울지 말지의 **판정 결과 그 자체**(core/rules 의 should_intervene).
     #: 프론트가 riskLevel == "HIGH" 로 재유도하지 않게 그대로 실어보낸다 — 지금은
     #: RISK_LEVEL_THRESHOLDS[1] == INTERVENE_THRESHOLD 라 둘이 우연히 같지만, 룰 쪽

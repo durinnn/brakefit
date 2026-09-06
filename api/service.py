@@ -18,7 +18,7 @@ import logging
 import re
 import tempfile
 from collections import OrderedDict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -43,9 +43,11 @@ from api.schemas import (
 )
 from core import schema
 from core.backtest.backtest import run as run_backtest
+from core.engine.engine import EngineResult
 from core.engine.engine import build as build_engine
 from core.guard.guard import generate as generate_coaching
 from core.metrics import averaging_down, chasing, disposition
+from core.metrics.base import MetricResult
 from core.parser import kb_hts
 from core.parser.reader import UnreadableExport
 from core.rules import engine as rules_engine
@@ -111,6 +113,49 @@ _SESSION_WARNINGS: dict[str, list[str]] = {}
 #: 동시에 들고 있을 업로드 세션 수 상한. 데모 동시 사용자 규모(수 명)의 여유분이다.
 MAX_SESSIONS = 50
 
+
+# ── 계산 결과 캐시 ───────────────────────────────────────────────────────────
+# Render 무료 인스턴스(공유 CPU)에서 실측한 응답시간: /api/diagnose 4s ·
+# /api/simulate-order 3.6s · /api/backtest **16s**. 두 번째 호출도 똑같이 느렸다 —
+# 매 요청마다 거래 생성 → engine.build → metrics → backtest 를 처음부터 다시 돌리기
+# 때문이다. 데모에서 백테스트 탭을 누르고 16초를 기다리는 건 그 자체로 탈락 사유다.
+#
+# 같은 소스(페르소나/세션)의 결과는 **결정론적**이라 캐시가 정답이다.
+#   · 페르소나: seed 고정 + 유니버스·as_of 가 DEMO_* 상수 + 시세는 커밋된 캐시 →
+#     같은 키면 영원히 같은 값. 그래서 **무효화 자체가 필요 없다**.
+#   · 세션: 업로드마다 새 uuid 를 발급하므로(ingest_upload) 거래내역이 바뀌면 키도
+#     같이 바뀐다 → 자연 무효화. 세션 안의 거래내역은 저장 후 수정되지 않는다.
+# 유일한 부작용은 DiagnosisReport.generated_at 이 첫 계산 시각으로 고정된다는 것인데,
+# 내용이 어차피 동일하므로 시각만 갱신하면 "다시 계산했다"는 거짓 신호가 된다.
+
+
+@dataclass
+class _SourceState:
+    """데이터 소스 하나(페르소나 키 또는 세션 id)에 딸린 거래내역 + 계산 결과 보관함.
+
+    engine/metrics/diagnosis/backtest 는 처음 필요할 때 채우고 그 뒤로는 재사용한다.
+    **완성된 객체만 대입한다** — 계산 도중의 반쪽짜리 상태를 필드에 올리지 않으면,
+    필드 대입이 GIL 하에서 원자적이라 별도 락 없이도 동시 요청이 안전하다. 두 요청이
+    같은 키를 동시에 계산하면 중복 계산이 일어나지만 값이 같으므로 문제가 없다.
+    """
+
+    trades: pd.DataFrame
+    as_of: date
+    universe: dict[str, str]
+    engine: EngineResult | None = None
+    metrics: list[MetricResult] | None = None
+    diagnosis: DiagnosisReport | None = None
+    backtest: BacktestResult | None = None
+
+
+#: {페르소나 키: 상태}. 페르소나는 5종뿐이고 불변이라 상한도 축출도 없다.
+_PERSONA_STATES: dict[str, _SourceState] = {}
+
+#: {세션 id: 상태}. _SESSIONS 와 같은 생애주기 — LRU 축출 시 같이 지운다
+#: (_store_session). 안 지우면 세션은 밀려났는데 그 세션의 timeline/백테스트
+#: 결과만 메모리에 영원히 남아, LRU 를 둔 이유(무료 인스턴스 512MB)가 무너진다.
+_SESSION_STATES: dict[str, _SourceState] = {}
+
 #: 업로드 파일 크기 상한(5MB). 증권사 export 는 수년치라도 수백KB 수준이라 넉넉하고,
 #: 이걸 안 막으면 큰 파일 하나가 read() 한 방에 메모리에 통째로 올라가 위와 같은
 #: 이유로 무료 인스턴스를 넘어뜨린다.
@@ -173,6 +218,9 @@ def _store_session(session_id: str, trades: pd.DataFrame, warnings: list[str]) -
     while len(_SESSIONS) > MAX_SESSIONS:
         evicted, _ = _SESSIONS.popitem(last=False)
         _SESSION_WARNINGS.pop(evicted, None)  # 같이 안 지우면 경고만 영원히 쌓인다
+        # 계산 결과 캐시도 같이 축출한다 — timeline/episodes/백테스트 결과는 원본
+        # 거래내역보다 크므로, 여기서 안 지우면 LRU 가 지키려던 메모리 상한이 무의미해진다
+        _SESSION_STATES.pop(evicted, None)
 
 
 def _merge_warnings(*groups: list[str]) -> list[str]:
@@ -395,6 +443,53 @@ def _resolve_trades(
     return trades, _session_as_of(trades), _session_universe(trades)
 
 
+def _source_state(persona_key: str, session_id: str | None) -> _SourceState:
+    """소스별 캐시 항목을 가져오거나(없으면) 만든다. 거래내역 확보는 여기서 한 번만.
+
+    페르소나는 캐시가 있으면 generate_trades() 자체를 건너뛴다(불변이라 안전).
+    세션은 캐시가 있어도 _resolve_trades() 를 한 번 태운다 — 세션 존재 확인(404)과
+    LRU 순서 갱신이 거기 있어서, 건너뛰면 축출된 세션이 캐시로 되살아난다.
+    """
+    if session_id is None:
+        state = _PERSONA_STATES.get(persona_key)
+        if state is None:
+            trades, as_of, tickers = _resolve_trades(persona_key, None)
+            state = _SourceState(trades, as_of, tickers)
+            _PERSONA_STATES[persona_key] = state
+        return state
+
+    trades, as_of, tickers = _resolve_trades(persona_key, session_id)
+    state = _SESSION_STATES.get(session_id)
+    if state is None:
+        state = _SourceState(trades, as_of, tickers)
+        _SESSION_STATES[session_id] = state
+    return state
+
+
+def _engine_of(state: _SourceState) -> EngineResult:
+    """timeline/episodes 빌드 — 소스당 한 번만.
+
+    예전에는 진단·모의주문·백테스트가 각자 build_engine 을 다시 돌려서, 한 세션을
+    끝까지 보는 데 같은 빌드를 3번 했다.
+    """
+    if state.engine is None:
+        state.engine = _guarded(build_engine, state.trades, as_of=state.as_of)
+    return state.engine
+
+
+def _metrics_of(state: _SourceState) -> list[MetricResult]:
+    """지표 3종 — 주문과 무관하게 과거 거래내역만 보므로 소스당 한 번이면 된다.
+
+    (모의 주문 결과는 주문에 따라 달라져서 캐시하지 않지만, 그 입력인 지표는 같다.)
+    """
+    if state.metrics is None:
+        engine = _engine_of(state)
+        state.metrics = [
+            mod.compute(engine.timeline, state.trades, engine.episodes) for mod in METRIC_MODULES
+        ]
+    return state.metrics
+
+
 def _upload_warnings(session_id: str | None) -> list[str]:
     """업로드 시점 경고(파서 경고·ticker 미해결 등). 페르소나 경로는 항상 빈 목록이다."""
     if session_id is None:
@@ -508,10 +603,10 @@ def universe(persona_key: str, *, session_id: str | None = None) -> list[Univers
     브레이크 룰이 전부 skip 되므로 — 판정할 수 없는 종목을 고를 수 있게 두면
     "브레이크가 안 걸리네" 로 오해하게 된다.
     """
-    _trades, as_of, tickers = _resolve_trades(persona_key, session_id)
+    state = _source_state(persona_key, session_id)
     items: list[UniverseItem] = []
-    for ticker, name in tickers.items():
-        ref = _reference_close(ticker, as_of)
+    for ticker, name in state.universe.items():
+        ref = _reference_close(ticker, state.as_of)
         items.append(
             UniverseItem(
                 ticker=ticker,
@@ -527,12 +622,18 @@ def universe(persona_key: str, *, session_id: str | None = None) -> list[Univers
 
 
 def diagnose(persona_key: str, *, session_id: str | None = None) -> DiagnosisReport:
-    trades, as_of, _universe = _resolve_trades(persona_key, session_id)
-    result = _guarded(build_engine, trades, as_of=as_of)
+    """같은 소스면 같은 리포트 — 첫 계산 결과를 그대로 재사용한다(_SourceState 주석)."""
+    state = _source_state(persona_key, session_id)
+    if state.diagnosis is None:
+        state.diagnosis = _diagnose(state, session_id)
+    return state.diagnosis
 
-    metric_results = [
-        mod.compute(result.timeline, trades, result.episodes) for mod in METRIC_MODULES
-    ]
+
+def _diagnose(state: _SourceState, session_id: str | None) -> DiagnosisReport:
+    trades = state.trades
+    result = _engine_of(state)
+    metric_results = _metrics_of(state)
+
     metrics = [
         BiasMetric(
             key=BIAS_KEY_TO_FRONTEND[m.key],
@@ -573,11 +674,12 @@ def diagnose(persona_key: str, *, session_id: str | None = None) -> DiagnosisRep
 def simulate_order(
     persona_key: str, order_req: SimulateOrderRequest, *, session_id: str | None = None
 ) -> InterventionReport:
-    trades, as_of, _universe = _resolve_trades(persona_key, session_id)
-    result = _guarded(build_engine, trades, as_of=as_of)
-    metric_results = [
-        mod.compute(result.timeline, trades, result.episodes) for mod in METRIC_MODULES
-    ]
+    # 결과는 주문에 따라 달라지므로 캐시하지 않는다 — 대신 입력(engine·metrics)만
+    # 소스 캐시에서 재사용해서, 주문마다 반복되던 빌드/지표 계산을 없앤다.
+    state = _source_state(persona_key, session_id)
+    as_of = state.as_of
+    result = _engine_of(state)
+    metric_results = _metrics_of(state)
 
     order = ProposedOrder(
         ticker=order_req.ticker,
@@ -640,6 +742,17 @@ def simulate_order(
         risk_level = "MEDIUM"
     else:
         risk_level = "HIGH"
+
+    # 개입이면 등급은 최소 "주의"(MEDIUM)로 올린다.
+    #
+    # 왜: 개입 판정이 점수 임계에서 "룰 하나라도 발동"으로 바뀐 뒤로(core/rules/engine.py),
+    # 팝업은 빨간 경고를 띄우는데 게이지는 초록 "낮음"으로 뜨는 조합이 실제로 나왔다
+    # (예: riskScore 24.35 + 추격매수 룰 발동). 화면 두 곳이 반대 얘기를 하면 사용자는
+    # 둘 다 안 믿는다. 등급은 어디까지나 표시용이라 여기서만 보정하고, 점수(risk_score)와
+    # 개입 판정(should_intervene)은 룰이 계산한 값 그대로 둔다.
+    # HIGH 승격은 하지 않는다 — 점수 >= INTERVENE_THRESHOLD 라는 기존 의미를 지킨다.
+    if report.should_intervene and risk_level == "LOW":
+        risk_level = "MEDIUM"
 
     # 표시용 등락률도 룰이 판정에 쓴 것과 **같은 종가**를 기준으로 한다. 예전에는
     # timeline 마지막 행의 close 를 썼는데(= 보유 기간에만 존재 + 청산된 옛 에피소드면
@@ -708,8 +821,18 @@ def _suggestions(should_intervene: bool, dominant_key: str | None) -> list[str]:
 
 
 def backtest(persona_key: str, *, session_id: str | None = None) -> BacktestResult:
-    trades, as_of, _universe = _resolve_trades(persona_key, session_id)
-    result = _guarded(run_backtest, trades, as_of=as_of)
+    """세 엔드포인트 중 제일 비싸다 — 매수 건마다 engine 을 다시 돌린다(룩어헤드
+    금지를 지키는 유일한 방법, core/backtest/backtest.py docstring). 결정론이므로
+    소스당 한 번만 계산하고 재사용한다."""
+    state = _source_state(persona_key, session_id)
+    if state.backtest is None:
+        state.backtest = _backtest(state, session_id)
+    return state.backtest
+
+
+def _backtest(state: _SourceState, session_id: str | None) -> BacktestResult:
+    trades = state.trades
+    result = _guarded(run_backtest, trades, as_of=state.as_of)
 
     return BacktestResult(
         period_label=_period_label(trades),
