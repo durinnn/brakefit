@@ -122,7 +122,7 @@ def _build_user_flow_appendix(text: str) -> str:
             lines.append("#### " + line[3:])
             continue
         lines.append(line)
-    header = f"### 부록 D. 사용자 흐름도 [D] {{: #{USER_FLOW_ANCHOR} }}"
+    header = f"### 부록 D. 사용자 흐름도 {{: #{USER_FLOW_ANCHOR} }}"
     return header + "\n" + "\n".join(lines).strip() + "\n"
 
 
@@ -423,8 +423,10 @@ img {{
 
 
 def _render_cover(cover: dict[str, object]) -> str:
+    # 표지 값에도 TODO 하이라이트를 건다 — 서비스 URL·API 문서는 마감 직전에 채우는
+    # 칸이라 본문과 달리 노랗게 안 뜨면 그대로 제출될 수 있다(본문은 _mark_todo 가 처리).
     rows = "\n".join(
-        f"      <tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>"
+        f"      <tr><th>{html.escape(k)}</th><td>{_mark_todo(html.escape(v))}</td></tr>"
         for k, v in cover["items"]  # type: ignore[union-attr]
     )
     contest = html.escape(str(cover["contest"]))
