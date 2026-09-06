@@ -1,4 +1,3 @@
-import Link from "next/link";
 import OrderForm from "./OrderForm";
 import PageHeader from "@/components/PageHeader";
 import SynthDisclaimer from "@/components/SynthDisclaimer";
@@ -27,32 +26,13 @@ export default async function TradePage() {
         }
       />
 
-      {universe.length > 0 ? (
-        <OrderForm
-          universe={universe}
-          source={source}
-          sessionExpired={sessionExpired}
-        />
-      ) : (
-        /* 종목이 하나도 없으면 판정할 대상이 없다 — 룰은 timeline 이 있는 종목만 본다 */
-        <section className="space-y-4 px-5 py-6">
-          <div className="rounded-2xl border border-warn/40 bg-ink-900 p-5">
-            <p className="text-base font-bold text-ink-100">
-              주문할 수 있는 종목이 없습니다
-            </p>
-            <p className="mt-2 text-sm leading-relaxed text-ink-300">
-              브레이크는 과거에 거래한 적 있는 종목만 판정합니다. 거래내역을
-              올리거나 데모 페르소나로 둘러보세요.
-            </p>
-          </div>
-          <Link
-            href="/upload"
-            className="flex w-full items-center justify-center rounded-xl border border-ink-600 bg-ink-800 py-4 text-sm font-semibold text-ink-100 transition-colors hover:bg-ink-700"
-          >
-            거래내역 올리기 →
-          </Link>
-        </section>
-      )}
+      {/* 종목이 하나도 없는 경우(= 판정할 대상 없음)의 안내도 OrderForm 안에 있다 —
+          같은 상황의 문구가 두 파일에 갈라져 있으면 한쪽만 고치게 된다 */}
+      <OrderForm
+        universe={universe}
+        source={source}
+        sessionExpired={sessionExpired}
+      />
 
       <SynthDisclaimer source={source} />
     </>

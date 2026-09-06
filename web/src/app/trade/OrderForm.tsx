@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import ArcGauge from "@/components/ArcGauge";
+import AnalysisUnavailable from "@/components/AnalysisUnavailable";
 import InterventionActions from "@/components/InterventionActions";
 import type { InterventionDecision } from "@/components/InterventionActions";
 import WaterfallChart from "@/components/WaterfallChart";
@@ -90,6 +91,23 @@ export default function OrderForm({
     () => universe.find((u) => u.ticker === form.ticker) ?? null,
     [universe, form.ticker],
   );
+
+  /**
+   * 종목이 하나도 없으면 select 가 빈 채로 뜨고 버튼만 비활성이라, 사용자는
+   * "왜 아무것도 못 고르지" 로만 보인다. 업로드한 거래의 종목코드를 전부 못
+   * 찾으면 유니버스가 통째로 빈다(api/service.universe → _session_universe).
+   *
+   * ⚠ 훅보다 먼저 return 하면 훅 호출 순서가 렌더마다 달라지므로, 훅을 전부
+   * 부른 뒤 여기서 분기한다.
+   */
+  if (universe.length === 0) {
+    return (
+      <AnalysisUnavailable
+        title="분석 가능한 종목이 없습니다"
+        detail="거래내역을 다시 확인해 주세요. 브레이크는 종목코드를 확인한 거래가 있는 종목만 판정합니다."
+      />
+    );
+  }
 
   const quantity = Number(form.quantity);
   const price = Number(form.price);

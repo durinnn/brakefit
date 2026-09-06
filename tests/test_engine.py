@@ -487,7 +487,9 @@ def test_ticker가_비어있는_행은_제외하되_경고를_남긴다(monkeypa
 
     result = build(trades, as_of=d1)
 
-    assert any("ticker 미해결 1건" in w and "resolve_tickers()" in w for w in result.warnings)
+    # 경고는 화면에 그대로 나가는 문구라 내부 함수명(resolve_tickers)을 담지 않는다
+    assert any("종목코드를 확인하지 못한 거래 1건" in w for w in result.warnings)
+    assert not any("resolve_tickers" in w for w in result.warnings)
     # 드롭 자체는 유지 — 계산에는 ticker 가 있는 종목만 들어간다
     assert result.timeline["ticker"].unique().tolist() == [TICKER]
     assert len(result.episodes) == 1

@@ -46,7 +46,10 @@ class DiagnosisReport(CamelModel):
     period_label: str = Field(serialization_alias="periodLabel")
     total_trades: int = Field(serialization_alias="totalTrades")
     overall_score: float = Field(serialization_alias="overallScore")
-    overall_grade: str = Field(serialization_alias="overallGrade")  # "안정"|"주의"|"위험"
+    #: "안정"|"주의"|"위험"|"분석 불가". 마지막은 점수가 아니라 **상태**다 —
+    #: 분석 대상 거래가 0건이면 점수를 매길 근거가 없는데도 종합 점수가 낮게
+    #: 나와서("안정") 정상 진단처럼 보이던 문제 때문에 등급으로 갈라냈다.
+    overall_grade: str = Field(serialization_alias="overallGrade")
     metrics: list[BiasMetric]
     generated_at: str = Field(serialization_alias="generatedAt")
     # core/guard 종합 소견 (context="report_summary"). web/(lovulive) types.ts 에는
