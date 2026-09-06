@@ -154,6 +154,8 @@ export default function UploadPage() {
 
           <p className="text-xs leading-relaxed text-ink-600">
             * 국내 주식 체결 내역만 분석합니다. 해외 주식·파생 행은 건너뜁니다.
+            <br />* 증권사 파일에 종목코드가 없으면 종목명으로 코드를 찾습니다. 조회가
+            막힌 환경에서는 종목코드 열이 있는 표준 CSV 를 권장합니다.
             <br />* 업로드하지 않아도 데모 페르소나로 모든 화면을 볼 수 있습니다.
           </p>
         </section>

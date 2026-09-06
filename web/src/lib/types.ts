@@ -32,7 +32,13 @@ export interface DiagnosisReport {
   totalTrades: number;
   /** 종합 편향 점수 0~100 */
   overallScore: number;
-  overallGrade: "안정" | "주의" | "위험";
+  /**
+   * "분석 불가" 는 점수 등급이 아니라 **상태**다 — 업로드한 거래가 전부 제외돼
+   * (종목코드 미해결 등) 엔진에 들어간 거래가 0건일 때 서버가 내려준다.
+   * 이때 overallScore·metrics 는 전부 0 이므로 게이지·지표 카드를 그리면
+   * "안정 0점" 이라는 정상처럼 생긴 오답이 된다. 반드시 안내 화면으로 분기할 것.
+   */
+  overallGrade: "안정" | "주의" | "위험" | "분석 불가";
   metrics: BiasMetric[];
   generatedAt: string;
   /**

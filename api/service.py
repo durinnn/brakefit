@@ -70,6 +70,10 @@ DEMO_UNIVERSE = {"005930": "삼성전자", "000660": "SK하이닉스", "035420":
 DEMO_AS_OF = date(2026, 8, 18)  # data/cache/prices/ 캐시 범위 안 — 네트워크 불필요
 
 GRADE_THRESHOLDS = (40.0, 70.0)  # score < 40 안정 / < 70 주의 / else 위험
+
+#: 분석 대상 거래가 0건일 때의 등급. **점수 구간이 아니라 상태**라서 GRADE_THRESHOLDS
+#: 바깥에 둔다. web/src/lib/types.ts 의 DiagnosisReport.overallGrade 유니온과 같이 맞출 것.
+UNANALYZABLE_GRADE = "분석 불가"
 RISK_LEVEL_THRESHOLDS = (INTERVENE_THRESHOLD * 0.6, INTERVENE_THRESHOLD)  # LOW / MEDIUM / HIGH
 
 
@@ -509,6 +513,27 @@ def _guarded(fn, *args, **kwargs):
         raise
 
 
+def _analyzable_count(trades: pd.DataFrame) -> int:
+    """엔진이 실제로 계산에 쓰는 거래 건수 = 종목코드가 붙은 행.
+
+    ticker 가 비면 engine.build() 가 그 행을 버린다(core/engine/engine.py). 전부
+    버려지면 timeline·episode 가 통째로 비는데, 지표는 그 상태를 "편향 사례 0건"
+    으로 읽어서 종합 12.5점 "안정" 이라는 **정상처럼 생긴 오답**을 낸다.
+    "거래를 못 읽었다" 와 "편향이 없다" 는 전혀 다른 얘기라 여기서 갈라준다.
+    """
+    if trades.empty or "ticker" not in trades.columns:
+        return 0
+    return int(trades["ticker"].notna().sum())
+
+
+def _unanalyzable_reason(trades: pd.DataFrame) -> str:
+    """0건 사유를 경고 문구로. 진단·백테스트가 같은 문장을 쓰도록 한 곳에 둔다."""
+    return (
+        f"업로드한 거래 {len(trades)}건이 모두 종목코드 미해결로 제외돼 "
+        "분석할 수 있는 거래가 없습니다. 거래내역 파일을 다시 확인해 주세요."
+    )
+
+
 def _grade(score: float) -> str:
     if score < GRADE_THRESHOLDS[0]:
         return "안정"
@@ -629,8 +654,47 @@ def diagnose(persona_key: str, *, session_id: str | None = None) -> DiagnosisRep
     return state.diagnosis
 
 
+def _unanalyzable_diagnosis(trades: pd.DataFrame, session_id: str | None) -> DiagnosisReport:
+    """분석 대상 0건일 때의 리포트 — 점수 대신 상태를 돌려준다.
+
+    엔진·지표·LLM 을 아예 태우지 않는다. 태워봐야 빈 timeline 에서 나온 숫자라
+    의미가 없고, 시세 조회만 헛돌아 502(PriceUnavailable) 가 날 여지만 생긴다.
+    """
+    return DiagnosisReport(
+        period_label=_period_label(trades),
+        total_trades=len(trades),
+        overall_score=0.0,
+        overall_grade=UNANALYZABLE_GRADE,
+        # 지표 카드 자리를 비우지 않는 건 프론트 계약(3개 고정) 때문이다 —
+        # 점수 0·표본 0 으로 "계산된 0" 이 아니라 "잴 것이 없었다" 를 표시한다.
+        metrics=[
+            BiasMetric(
+                key=BIAS_KEY_TO_FRONTEND[key],
+                name=label,
+                score=0.0,
+                percentile=0.0,
+                summary="분석 가능한 거래가 없습니다",
+                sample_count=0,
+                delta=None,
+            )
+            for key, label in BIAS_KEY_LABEL.items()
+        ],
+        generated_at=datetime.now().isoformat(timespec="seconds"),
+        headline="분석할 수 있는 거래가 없습니다",
+        body=(
+            "업로드한 거래내역에서 종목코드를 확인하지 못해 분석 대상이 남지 않았습니다. "
+            "국내 주식 체결이 담긴 다른 화면으로 다시 export 하거나, 데모 페르소나로 "
+            "먼저 둘러보세요."
+        ),
+        warnings=_merge_warnings(_upload_warnings(session_id), [_unanalyzable_reason(trades)]),
+    )
+
+
 def _diagnose(state: _SourceState, session_id: str | None) -> DiagnosisReport:
     trades = state.trades
+    if _analyzable_count(trades) == 0:
+        return _unanalyzable_diagnosis(trades, session_id)
+
     result = _engine_of(state)
     metric_results = _metrics_of(state)
 
@@ -832,6 +896,21 @@ def backtest(persona_key: str, *, session_id: str | None = None) -> BacktestResu
 
 def _backtest(state: _SourceState, session_id: str | None) -> BacktestResult:
     trades = state.trades
+    # 진단과 같은 판정 — 분석 대상이 0건이면 개입할 매수도 0건이다. 0원 카드만
+    # 덩그러니 띄우면 "브레이크가 아무것도 못 막았다" 로 읽히므로 사유를 같이 싣는다.
+    if _analyzable_count(trades) == 0:
+        return BacktestResult(
+            period_label=_period_label(trades),
+            intervention_count=0,
+            avoided_loss=0.0,
+            missed_gain=0.0,
+            net_benefit=0.0,
+            net_benefit_rate=0.0,
+            hit_rate=0.0,
+            cases=[],
+            warnings=_merge_warnings(_upload_warnings(session_id), [_unanalyzable_reason(trades)]),
+        )
+
     result = _guarded(run_backtest, trades, as_of=state.as_of)
 
     return BacktestResult(
@@ -860,6 +939,7 @@ __all__ = [
     "MAX_UPLOAD_BYTES",
     "NOT_REAL_USER_DISCLAIMER",
     "PriceUnavailable",
+    "UNANALYZABLE_GRADE",
     "SessionNotFound",
     "UploadRejected",
     "backtest",
