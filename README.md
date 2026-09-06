@@ -127,43 +127,55 @@ main 보호 + PR · 논쟁은 10분 토론 후 리더 결정
 - 합성 페르소나 결과에는 **"실사용자 분포 아님" 각주 필수**
 - 룩어헤드(미래 데이터 참조) 절대 금지
 
-## 8. 현재 상태 (2026-08-27)
+## 8. 현재 상태 (2026-09-07, 제출 시점)
 
-**🚨 최우선 블로커: 실 거래내역이 0건이다.**
+**배포 완료 — 전체 파이프라인이 프로덕션에서 돈다.**
 
-계좌는 개설했으나 국내주식 매매 이력이 없다. KB HTS 화면 3종(0112·0330·0377)의 포맷은
-전부 확정했고 파서도 완성됐지만, **넣을 데이터가 없다.**
+- 서비스: https://brakefit.vercel.app (Next.js 15, Vercel)
+- API: https://brakefit.onrender.com/docs (FastAPI, Render)
+- 기능 명세서: [`docs/spec.md`](./docs/spec.md) · 인쇄본 [`docs/spec.html`](./docs/spec.html)
 
-→ 개발·데모는 **`core/synth` 합성 페르소나**로 간다. 이게 우회로가 아니라 메인 도로다.
-   파서는 실데이터가 오면 바로 붙도록 준비만 된 상태.
-   실데이터가 필요하면 기존 계좌에 매매 기록이 있는 팀원을 찾는 게 가장 빠르다.
+데모·검증의 주 데이터는 **`core/synth` 합성 페르소나 5종**이다(실사용자 분포 아님).
+실계좌 export 로 파서 동작은 확인했지만 국내주식 실데이터 검증은 v1 범위 밖.
 
 | 모듈 | 상태 |
 |---|---|
-| `core/parser` | ✅ KB 화면 3종 매핑, 테스트 30개 |
-| `tools/inspect_export.py` | ✅ 증권사 파일 구조 덤프 + 개인정보 마스킹 |
-| `core/synth` | ✅ 합성 페르소나 5종 + pykrx 원시 시세 캐시(`prices.py`). Monte Carlo로 편향 신호 검증 |
-| `docs/schema.md` | 원시 시세 인터페이스(§5) 확정. **A 확정 필요 — §6 미결 3개** (최대 병목) |
-| `core/engine` · `core/metrics` · `core/rules` · `core/backtest` · `api/` | ⬜ |
-| `web/` | 스켈레톤은 `lovulive` 브랜치 (Next.js) |
+| `core/parser` | ✅ KB 화면 3종(0112·0330·0377) YAML 매핑, 실 export 파싱 확인 |
+| `core/synth` | ✅ 페르소나 5종 + pykrx 시세 parquet 캐시(레포 동봉, 네트워크 없이 동작) |
+| `core/engine` | ✅ 거래 재생 → 일별 타임라인·에피소드 (`docs/schema.md` §2·§3·§6) |
+| `core/metrics` | ✅ 처분효과·물타기·추격매수 0~100 점수 + evidence |
+| `core/rules` | ✅ 브레이크 룰 3종. 개입 = 룰 발동(백테스트 집계 기준과 동일). 기준 종가는 as_of 이하 시세 캐시(룩어헤드 없음) |
+| `core/guard` | ✅ LLM 코칭 문구(Haiku) + 숫자 화이트리스트·금지어·2.5s 타임아웃 → 템플릿 폴백 |
+| `core/backtest` | ✅ BUY 편향 2종 반사실 재생. 검증 구간(상승장)에서 5종 전부 순손실 — 숨기지 않고 표시 |
+| `api/` | ✅ upload · diagnose · simulate-order · backtest · universe. 세션 50개 LRU, 업로드 5MB, 결과 캐시 + 프리워밍 |
+| `web/` | ✅ 업로드 · 진단 대시보드 · 모의 주문(폼 → 개입 모달) · 백테스트. 합성 각주, 경고 배너, 분석 불가 안내 |
+| 테스트 | `uv run pytest` 222개 |
+
+알려진 한계는 [`docs/spec.md` §10](./docs/spec.md) 참조 (국내주식·KB 전용, 세션 비영속, 백테스트 기간 의존, 백분위 20표본 참고용).
 
 ## 9. 관련 문서
 
 | 파일 | 내용 |
 |---|---|
+| [`docs/spec.md`](./docs/spec.md) | **기능 명세서 (제출본)** — 화면·산식·룰·백테스트 결과·한계 |
+| [`docs/user-flow.md`](./docs/user-flow.md) | 사용자 흐름도 · 화면 상태 · 요청 시퀀스 |
 | [`AGENTS.md`](./AGENTS.md) | AI 코딩 지침 · 폴더 오너십 · 절대 규칙 |
 | [`docs/schema.md`](./docs/schema.md) | 데이터 계약 (표준 거래내역 / 타임라인 / 에피소드 / 지표 출력) |
 | [`docs/parser-kb.md`](./docs/parser-kb.md) | KB증권 export 포맷 스펙 · 화면번호 목록 · 함정 모음 |
-| `docs/architecture.md` | C4 컨테이너 다이어그램 (`dev` 브랜치) |
-| `docs/sequences.md` | 진단·개입 플로우 시퀀스 다이어그램 (`dev` 브랜치) |
+| [`docs/architecture.md`](./docs/architecture.md) | C4 컨테이너 다이어그램 |
+| [`docs/sequences.md`](./docs/sequences.md) | 진단·개입 플로우 시퀀스 다이어그램 |
 
 ## 개발 환경
 
 ```bash
-uv sync                       # 환경 구성
+uv sync --extra web           # 환경 구성 (api/ 가 fastapi 를 씀)
 uv run pytest                 # 전체 테스트
 uv run ruff format . && uv run ruff check --fix .   # 커밋 전 필수
 
+uv run uvicorn api.main:app --reload                 # API 서버 (http://localhost:8000/docs)
+cd web && npm ci && npm run dev                      # 프론트 (NEXT_PUBLIC_API_BASE 기본 localhost:8000)
+
 python tools/inspect_export.py <증권사파일>          # export 구조 확인
 python tools/inspect_export.py <파일> --redact       # 공유용 마스킹 사본
+uv run python tools/build_spec_html.py               # docs/spec.html 재생성 (--extra docs 필요)
 ```
