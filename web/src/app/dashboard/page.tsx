@@ -83,6 +83,15 @@ export default async function DashboardPage() {
         {report.metrics.map((metric) => (
           <BiasMetricCard key={metric.key} metric={metric} />
         ))}
+
+        {/*
+          백분위 기준선은 업로드 세션이든 데모 페르소나든 항상 합성 표본이다.
+          SynthDisclaimer 는 source === "persona" 일 때만 뜨므로 업로드 세션에서는
+          이 사실이 어디에도 안 남는다 — 그래서 지표 카드 바로 아래에 항상 붙인다.
+        */}
+        <p className="pt-1 text-xs leading-relaxed text-ink-600">
+          * 합성 페르소나 20개 표본 기준이며 실제 투자자 분포가 아닙니다.
+        </p>
       </section>
 
       <section className="px-5 pb-8">
