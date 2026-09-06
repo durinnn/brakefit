@@ -1,11 +1,14 @@
-"""docs/spec.md → docs/spec.html (브라우저에서 Ctrl+P → PDF 저장용 단일 HTML).
+"""마크다운 문서 → 인쇄용 단일 HTML (브라우저에서 Ctrl+P → PDF 저장).
+
+제출 문서가 기획서·MVP 산출물·기능 명세서로 갈라져서, 입력 문서를 인자로 받는다.
 
 사용법:
-    uv run python tools/build_spec_html.py            # docs/spec.html 생성
-    uv run python tools/build_spec_html.py --out /tmp/x.html
+    uv run python tools/build_spec_html.py                      # docs/spec.md → docs/spec.html
+    uv run python tools/build_spec_html.py --in docs/mvp.md     # → docs/mvp.html
+    uv run python tools/build_spec_html.py --in docs/x.md --out /tmp/x.html
 
 이 환경에는 chrome·pandoc 이 없다. 변환(HTML→PDF)은 사람이 브라우저에서 한다:
-    1) 이 스크립트로 docs/spec.html 생성
+    1) 이 스크립트로 HTML 생성
     2) 브라우저로 열고 mermaid 다이어그램이 다 그려질 때까지 1~2초 기다림
     3) Ctrl+P → 대상 "PDF로 저장", 여백 "기본", **배경 그래픽 켜기**(표 헤더·코드 배경이 나오게)
 
@@ -16,11 +19,16 @@
     (다이어그램을 SVG 로 미리 굽는 건 chrome 이 있어야 해서 이 환경에선 불가).
 
 입력:
-  docs/spec.md          본문 (표지 정보는 상단 목록에서 파싱)
-  docs/architecture.md  첫 mermaid 블록 → spec 아키텍처 절에 삽입 (본문이 이미 다이어그램을
-                        갖고 있으면 건너뜀)
-  docs/user-flow.md     → 부록 D 로 붙임 (본문에 부록 D 가 이미 있으면 건너뜀.
-                        붙일 때는 spec 안의 user-flow.md 링크가 이 부록을 가리키게 바꿈)
+  <입력 문서>           본문 (표지 정보는 상단 `- 레이블: 값` 목록에서 파싱)
+  docs/architecture.md  첫 mermaid 블록 → "시스템 아키텍처" 절에 삽입. 그 절이 없거나
+                        본문이 이미 다이어그램을 갖고 있으면 건너뛴다(문서마다 절 구성이
+                        다르므로 없는 것은 오류가 아니다)
+  docs/user-flow.md     → 부록 D 로 붙임. 본문에 user-flow.md 링크가 있을 때만 붙이고,
+                        붙일 때 그 링크가 이 부록을 가리키게 바꾼다. 본문이 흐름도를 직접
+                        갖고 있으면 링크가 없으므로 자연히 건너뛴다
+
+없는 이미지는 경고만 내고 태그를 지운다 — 깨진 이미지 아이콘이 PDF 에 남는 것보다,
+빠졌다는 사실이 빌드 로그에 남는 편이 제출 직전에 발견하기 쉽다.
 """
 
 from __future__ import annotations
@@ -59,13 +67,13 @@ _MERMAID_TOKEN = "MERMAIDBLOCKPLACEHOLDER{}ENDMERMAIDBLOCK"
 # --------------------------------------------------------------------------- 파싱
 
 
-def _split_head_body(text: str) -> tuple[str, str]:
-    """spec.md 를 (표지 재료가 든 머리말, `## 1.` 부터의 본문) 으로 가른다."""
+def _split_head_body(text: str, source: Path) -> tuple[str, str]:
+    """입력 문서를 (표지 재료가 든 머리말, 첫 `## ` 부터의 본문) 으로 가른다."""
     lines = text.splitlines()
     for i, line in enumerate(lines):
         if line.startswith("## "):
             return "\n".join(lines[:i]), "\n".join(lines[i:])
-    raise SystemExit("docs/spec.md 에 `## ` 섹션이 없다 — 구조가 바뀌었는지 확인할 것.")
+    raise SystemExit(f"{source} 에 `## ` 섹션이 없다 — 구조가 바뀌었는지 확인할 것.")
 
 
 def _parse_cover(head: str) -> dict[str, object]:
@@ -107,15 +115,19 @@ def _insert_architecture_diagram(body: str, diagram: str) -> str:
     """ "시스템 아키텍처" 절 제목 바로 아래에 아키텍처 다이어그램을 끼워 넣는다.
 
     절 번호가 아니라 제목 키워드로 찾는다 — 목차를 재배열할 때마다 번호가 바뀌어서 번호에
-    묶어두면 조용히 빠진다. 다만 "AI 아키텍처" 같은 절이 앞에 있으면 느슨한 키워드가 그쪽을
-    먼저 물어버리므로, "시스템 아키텍처/시스템 구성" 을 우선 찾고 없을 때만 느슨하게 본다.
+    묶어두면 조용히 빠진다. 키워드는 "시스템 아키텍처/시스템 구성" 으로 좁힌다 — 기획서의
+    "AI 아키텍처" 절이 먼저 걸리면 시스템 다이어그램이 엉뚱한 장에 끼어든다.
 
     본문이 이미 제목 바로 아래에 mermaid 블록을 갖고 있으면 그것이 우선이다 — 넣으면
-    같은 다이어그램이 두 번 그려진다(본문 쪽이 spec 에 맞게 손질된 판본이라 그쪽을 남긴다).
+    같은 다이어그램이 두 번 그려진다(본문 쪽이 문서에 맞게 손질된 판본이라 그쪽을 남긴다).
+
+    절 자체가 없는 문서(기획서 등)도 있으므로 못 찾은 것은 오류가 아니다. 정보 메시지만 남긴다.
     """
     lines = body.splitlines()
     target = None
-    for pattern in (r"^##\s+\d+\.\s+.*(시스템 아키텍처|시스템 구성)", r"^##\s+\d+\.\s+.*아키텍처"):
+    # 느슨한 "아키텍처" 폴백은 두지 않는다 — 기획서의 "AI 아키텍처" 절을 물어 시스템
+    # 다이어그램이 엉뚱한 장에 끼어든다.
+    for pattern in (r"^##\s+\d+\.\s+.*(시스템 아키텍처|시스템 구성)",):
         for i, line in enumerate(lines):
             if re.match(pattern, line):
                 target = i
@@ -123,7 +135,7 @@ def _insert_architecture_diagram(body: str, diagram: str) -> str:
         if target is not None:
             break
     if target is None:
-        print("경고: 시스템 아키텍처 절을 못 찾아 다이어그램을 넣지 못했다.", file=sys.stderr)
+        print("  (시스템 아키텍처 절이 없어 아키텍처 다이어그램 삽입을 건너뜀)")
         return body
 
     for nxt in lines[target + 1 :]:
@@ -191,19 +203,25 @@ def _loosen_lists(text: str) -> str:
     return "\n".join(out)
 
 
-def _inline_images(text: str, base_dir: Path) -> tuple[str, int]:
-    """`![alt](img/x.png)` 을 base64 data URI 로 바꾼다."""
+def _inline_images(text: str, base_dir: Path) -> tuple[str, int, int]:
+    """`![alt](img/x.png)` 을 base64 data URI 로 바꾼다.
+
+    파일이 없으면 태그를 지운다. 남겨두면 PDF 에 깨진 이미지 아이콘이 그대로 인쇄되는데,
+    아직 안 찍은 스크린샷 자리를 문서에 미리 박아두는 운용이라 이 경우가 실제로 생긴다.
+    """
     count = 0
+    missing = 0
 
     def repl(match: re.Match[str]) -> str:
-        nonlocal count
+        nonlocal count, missing
         alt, src = match.group(1), match.group(2).strip()
         if src.startswith(("http://", "https://", "data:")):
             return match.group(0)
         path = (base_dir / src).resolve()
         if not path.is_file():
-            print(f"경고: 이미지 없음 — {src}", file=sys.stderr)
-            return match.group(0)
+            missing += 1
+            print(f"경고: 이미지 없음 {src} — 태그 제거", file=sys.stderr)
+            return ""
         mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         count += 1
@@ -212,7 +230,7 @@ def _inline_images(text: str, base_dir: Path) -> tuple[str, int]:
     out = []
     for line, in_fence in _iter_non_fence(text):
         out.append(line if in_fence else re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", repl, line))
-    return "\n".join(out), count
+    return "\n".join(out), count, missing
 
 
 def _rewrite_links(text: str) -> tuple[str, int]:
@@ -382,13 +400,17 @@ blockquote p {{ margin: 4px 0; }}
 img {{
   max-width: 100%;
   /* 스크린샷 세로가 길어 한 페이지를 넘기지 않게 A4 본문 높이(약 261mm) 안으로 묶는다 */
-  max-height: 180mm;
+  max-height: 130mm;
   height: auto;
   display: block;
   margin: 10px auto;
   border: 1px solid #ddd;
   page-break-inside: avoid;
 }}
+
+/* 표 안의 이미지는 썸네일이다(시연 가이드의 화면 4장 한 줄). 본문 이미지 규칙을 그대로
+   쓰면 한 칸에 한 화면씩 크게 들어가 페이지를 잡아먹는다. */
+table img {{ max-height: 260px; width: auto; }}
 
 .mermaid {{
   background: #fff;
@@ -467,26 +489,27 @@ def _render_cover(cover: dict[str, object]) -> str:
 </section>"""
 
 
-def build(spec_path: Path, out_path: Path) -> Path:
-    spec_md = spec_path.read_text(encoding="utf-8")
-    head, body = _split_head_body(spec_md)
+def build(src_path: Path, out_path: Path) -> Path:
+    source_md = src_path.read_text(encoding="utf-8")
+    head, body = _split_head_body(source_md, src_path)
     cover = _parse_cover(head)
 
     body = _insert_architecture_diagram(
         body, _extract_first_mermaid((DOCS_DIR / "architecture.md").read_text(encoding="utf-8"))
     )
-    # 본문이 부록 D 를 직접 갖고 있으면 user-flow.md 를 붙이지 않는다 — 붙이면 부록 D 가
-    # 두 벌 들어간다. (spec 본문의 흐름도는 인쇄용으로 줄인 판본이라 그쪽을 남긴다.)
-    if re.search(r"^###\s+부록 D\.", body, re.MULTILINE):
-        combined = body.rstrip() + "\n"
-    else:
+    # user-flow.md 를 부록으로 붙이는 것은 본문이 그 파일을 링크로 가리킬 때뿐이다. 본문이
+    # 흐름도를 직접 갖고 있으면(현 spec·MVP 산출물) 링크가 없으므로 자연히 안 붙고, 부록 D 가
+    # 두 벌 들어가는 일도 없다.
+    if re.search(r"\]\((?:\./)?(?:docs/)?user-flow\.md\)", body):
         appendix = _build_user_flow_appendix(
             (DOCS_DIR / "user-flow.md").read_text(encoding="utf-8")
         )
         combined = body.rstrip() + "\n\n" + appendix
+    else:
+        combined = body.rstrip() + "\n"
 
     combined = _loosen_lists(combined)
-    combined, image_count = _inline_images(combined, DOCS_DIR)
+    combined, image_count, missing_images = _inline_images(combined, DOCS_DIR)
     combined, link_count = _rewrite_links(combined)
     combined, mermaid_blocks = _extract_mermaid(combined)
 
@@ -516,7 +539,8 @@ def build(spec_path: Path, out_path: Path) -> Path:
   <h2>목차</h2>
   {toc}
   <p class="build-note">
-    이 문서는 <code>tools/build_spec_html.py</code> 가 <code>docs/spec.md</code> 로 생성했다.
+    이 문서는 <code>tools/build_spec_html.py</code> 가
+    <code>{html.escape(_repo_rel(src_path))}</code> 로 생성했다.
     PDF 로 만들려면 다이어그램이 다 그려진 뒤 Ctrl+P → "PDF로 저장",
     <strong>배경 그래픽 켜기</strong>. (이 안내문은 인쇄에 나오지 않는다.)
   </p>
@@ -538,22 +562,44 @@ def build(spec_path: Path, out_path: Path) -> Path:
 </body>
 </html>
 """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc, encoding="utf-8")
     size_kb = out_path.stat().st_size / 1024
     print(f"생성: {out_path}  ({size_kb:,.0f} KB)")
+    missing_note = f" · 이미지 누락 {missing_images}건" if missing_images else ""
     print(
         f"  이미지 인라인 {image_count}장 · mermaid {len(mermaid_blocks)}개 · "
-        f"링크 {link_count}개 절대화"
+        f"링크 {link_count}개 절대화{missing_note}"
     )
     return out_path
 
 
+def _repo_rel(path: Path) -> str:
+    """빌드 안내문에 찍을 경로 — 레포 안이면 상대경로로 줄인다."""
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="docs/spec.md → 인쇄용 docs/spec.html")
-    parser.add_argument("--spec", type=Path, default=DOCS_DIR / "spec.md")
-    parser.add_argument("--out", type=Path, default=DOCS_DIR / "spec.html")
+    parser = argparse.ArgumentParser(description="마크다운 문서 → 인쇄용 단일 HTML")
+    parser.add_argument(
+        "--in",
+        dest="in_path",
+        type=Path,
+        default=DOCS_DIR / "spec.md",
+        help="입력 마크다운 (기본: docs/spec.md)",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="출력 HTML (기본: 입력 파일명의 확장자만 .html 로 바꾼 것)",
+    )
     args = parser.parse_args()
-    build(args.spec, args.out)
+    out_path = args.out if args.out is not None else args.in_path.with_suffix(".html")
+    build(args.in_path, out_path)
 
 
 if __name__ == "__main__":
